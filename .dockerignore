@@ -1,0 +1,28 @@
+# 版本控制
+.git
+.gitignore
+
+# 虚拟环境
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+
+# 运行时生成的数据
+logs/
+data/
+tmp/
+
+# 敏感信息
+.env
+
+# 其他
+.DS_Store
+*.log
+README.md
+docker-compose.yml
+Dockerfile
+.dockerignore 

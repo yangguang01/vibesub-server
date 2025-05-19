@@ -1,0 +1,16 @@
+version: '3'
+
+services:
+  tube-trans-server:
+    build: .
+    container_name: tube-trans-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./static:/app/static
+    environment:
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    restart: unless-stopped 

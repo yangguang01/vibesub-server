@@ -1,0 +1,17 @@
+fastapi>=0.115.0
+uvicorn>=0.34.0
+python-dotenv>=1.0.1
+python-multipart>=0.0.20
+yt-dlp
+replicate>=1.0.4
+openai>=1.0.0
+tenacity>=9.0.0
+aiohttp>=3.11.13
+nest-asyncio>=1.6.0
+pydantic>=2.10.6 
+assemblyai
+google-cloud-pubsub
+google-cloud-firestore
+google-cloud-storage
+google-auth
+pytz>=2023.3

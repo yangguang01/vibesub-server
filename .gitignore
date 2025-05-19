@@ -1,0 +1,46 @@
+# 环境变量文件
+.env
+.env.example
+tube-trans-firebase-adminsdk-fbsvc-f1a07a8cf3.json
+
+# Python缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pytest_cache/
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# 日志文件
+logs/
+*.log
+api_documentation.txt
+
+# 数据文件夹
+static/subtitles/
+static/transcripts/
+tmp/
+
+# IDE配置
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store 
+
+# 测试文件
+test_function.py
+
+# 文档
+project_docs/
