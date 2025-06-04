@@ -33,8 +33,8 @@ app = FastAPI(
 # 添加CORS中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源，生产环境应该限制
-    #allow_origins=["http://localhost:3000"],
+    #allow_origins=["*"],  # 允许所有来源，生产环境应该限制
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
