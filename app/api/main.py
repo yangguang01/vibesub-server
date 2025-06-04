@@ -1,5 +1,4 @@
 import os
-import nest_asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -7,14 +6,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 import uvicorn
 
+
 from app.api.router import api_router
 from app.common.core.config import API_PREFIX
 from app.common.core.logging import logger
 from app.common.utils.file_utils import create_directories
 from app.common.utils.cleanup import setup_cleanup_task
+from app.common.utils.firebase_init import init_firebase
+from app.common.utils.firebase_storage_init import *
 
-# 应用nest_asyncio以在Jupyter环境下支持嵌套事件循环
-nest_asyncio.apply()
+
+from dotenv import load_dotenv
+load_dotenv()  # 会加载 .env 文件中的 proxy 配置
+
+# 初始化 Firebase Admin SDK
+init_firebase()
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -23,10 +29,12 @@ app = FastAPI(
     version="0.1.0"
 )
 
+
 # 添加CORS中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 允许所有来源，生产环境应该限制
+    #allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,12 +67,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行的操作"""
-    # 创建必要的目录
-    create_directories()
-    
-    # 设置定期清理任务
-    setup_cleanup_task()
-    
     logger.info("应用启动成功")
 
 

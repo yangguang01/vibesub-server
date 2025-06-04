@@ -1,18 +1,25 @@
+import uuid
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List
+from concurrent.futures import ThreadPoolExecutor
 
+from app.common.utils.executor import executor
 from app.common.models.schemas import (
     TranslationRequest, TaskResponse, TaskStatus, 
     TranslationStrategiesResponse, PaginatedTaskListResponse,
-    TaskDetail, TaskListItem, UserDailyLimitResponse
+    TaskDetail, TaskListItem, UserDailyLimitResponse, UserLimitInfoResponse
 )
 from app.worker.processor import create_translation_task, get_task_status, get_task_translation_strategies
 from app.common.services.firestore import db
 from app.common.models.firestore_models import (
-    get_task, get_user_tasks, count_user_tasks, check_user_daily_limit
+    get_task, get_user_tasks, count_user_tasks, check_user_daily_limit,
+    update_user_task_stats, get_video_task, create_user_task, create_or_update_video_task, update_video_task, record_successful_request, get_user_limit_info, get_video_id_from_task
 )
-from app.api.auth import get_current_user_id
+from app.common.utils.auth import verify_firebase_session, get_current_user_id
 from app.common.core.logging import logger
+from app.common.utils.youtube import extract_video_id, get_video_id_by_yt_dlp
+from app.common.utils.pubsub_client import publish_translation_task
 
 router = APIRouter()
 
@@ -27,36 +34,70 @@ async def translate_video(request: TranslationRequest, user_id: str = Depends(ge
     返回:
         TaskResponse: 包含任务ID和状态的响应体
     """
-    # 检查用户是否超过每日限额
-    limit_info = check_user_daily_limit(user_id)
+    loop = asyncio.get_event_loop()
     
-    # 如果有限制且超过限额，拒绝请求
-    if limit_info.get("limit_exceeded", False):
+    # 判断是否超限
+    if not await loop.run_in_executor(executor, check_user_daily_limit, user_id):
         raise HTTPException(
-            status_code=429, 
-            detail={
-                "message": "您今日的翻译次数已用完，请明天再试",
-                "limit_info": limit_info
-            }
+            status_code=429,
+            detail="您今日的翻译次数已用完，请明天再试"
         )
     
-    task_id = create_translation_task(
-        youtube_url=str(request.youtube_url),
-        custom_prompt=request.custom_prompt,
-        special_terms=request.special_terms,
-        content_name=request.content_name,
-        channel_name=request.channel_name,
-        language=request.language,
-        model=request.model,
-        user_id=user_id
-    )
+    # 从YouTube URL提取视频ID
+    youtube_url = str(request.youtube_url)
+    video_id = extract_video_id(youtube_url)
+    if not video_id:
+        video_id = await loop.run_in_executor(executor, get_video_id_by_yt_dlp, youtube_url)
+    if not video_id:
+        raise HTTPException(
+            status_code=400,
+            detail="无法从URL提取YouTube视频ID，请检查URL格式"
+        )
     
+    # 创建任务id，判断结果是否存在
+    task_id = str(uuid.uuid4())
+
+    # 检查video_id对应的任务是否已存在且已完成
+    video_task = await loop.run_in_executor(executor, get_video_task, video_id)
+    if video_task and video_task.get("status") == "completed":
+        logger.info("已存在，复用翻译结果")
+        # 已完成，写入用户任务信息
+        await loop.run_in_executor(
+            executor, create_user_task, user_id, video_id, youtube_url, task_id, False
+        )
+        await loop.run_in_executor(
+            executor, create_or_update_video_task, video_id, request.content_name, youtube_url, user_id
+        )
+        await loop.run_in_executor(
+            executor, record_successful_request, user_id, video_id, request.content_name
+        )
+        return {"task_id": task_id, "status": video_task.get("status", "completed")}
+
+    # 从来没有翻译的视频，创建翻译任务
+    await loop.run_in_executor(
+        executor, create_user_task, user_id, video_id, youtube_url, task_id, True
+    )
+
+    # 测试代码
+    # pubsub测试未完成
+    logger.info("新视频，通过pubsub下发任务")
+    payload = {
+        "youtube_url": youtube_url,
+        "user_id": user_id,
+        "video_id": video_id,
+        "content_name": request.content_name,
+        "special_terms": request.special_terms or "",
+        "model": request.model or ""
+    }
+    publish_translation_task(payload)
     return {"task_id": task_id, "status": "pending"}
+
 
 @router.get("/{task_id}", response_model=TaskDetail)
 async def get_task_detail(task_id: str, user_id: str = Depends(get_current_user_id)):
     """
     获取任务详细信息
+    用于内部任务分析，不对用户开放
     
     参数:
         task_id (str): 任务ID
@@ -88,6 +129,8 @@ async def list_tasks(
 ):
     """
     获取当前用户的任务列表
+    以后用在dashboard页面，显示用户的翻译历史
+    不对用户开发
     
     参数:
         limit (int): 每页记录数
@@ -126,25 +169,22 @@ async def list_tasks(
         last_doc_id=last_id
     )
 
+
 @router.get("/{task_id}/status", response_model=TaskStatus)
 async def get_task_status_endpoint(task_id: str, user_id: str = Depends(get_current_user_id)):
     """
-    获取任务状态
-    
-    参数:
-        task_id (str): 任务ID
-        
-    返回:
-        TaskStatus: 任务状态信息
+    接收task_id,从user_task表中获取video_id,再用video id从videoinfo里面取status
     """
-    task_info = get_task_status(task_id)
-    if task_info is None:
-        # 尝试从Firestore获取
-        task_info = get_task(task_id)
-        if task_info is None:
-            raise HTTPException(status_code=404, detail="Task not found")
+    loop = asyncio.get_event_loop()
+
+    video_id = await loop.run_in_executor(executor, get_video_id_from_task, task_id)
+    task_info = await loop.run_in_executor(executor, get_video_task, video_id)
     
+    if task_info is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
     return TaskStatus(**task_info)
+
 
 @router.get("/{task_id}/strategies", response_model=TranslationStrategiesResponse)
 async def get_translation_strategies(task_id: str, user_id: str = Depends(get_current_user_id)):
@@ -157,18 +197,27 @@ async def get_translation_strategies(task_id: str, user_id: str = Depends(get_cu
     返回:
         TranslationStrategiesResponse: 包含翻译策略的响应体
     """
-    result = get_task_translation_strategies(task_id)
-    if result is None:
-        raise HTTPException(404, "Task not found or strategies not yet generated")
-    return result
+    loop = asyncio.get_event_loop()
 
-@router.get("/limit/check", response_model=UserDailyLimitResponse)
-async def check_daily_limit(user_id: str = Depends(get_current_user_id)):
+    video_id = await loop.run_in_executor(executor, get_video_id_from_task, task_id)
+    video_doc = await loop.run_in_executor(executor, get_video_task, video_id)
+    if video_doc is None:
+        raise HTTPException(404, "Task not found or strategies not yet generated")
+    
+    strategies = video_doc.get("translation_strategies", [])
+    return {"strategies": strategies}
+
+
+@router.get("/limit/info", response_model=UserLimitInfoResponse)
+async def get_limit_info(user_id: str = Depends(get_current_user_id)):
     """
-    检查当前用户的每日使用限额
+    获取用户的使用限额信息
+    返回当日使用量和每日上限
     
     返回:
-        UserDailyLimitResponse: 用户限额信息
+        UserLimitInfoResponse: 用户限额信息
     """
-    limit_info = check_user_daily_limit(user_id)
-    return UserDailyLimitResponse(**limit_info) 
+    loop = asyncio.get_event_loop()
+
+    limit_info = await loop.run_in_executor(executor, get_user_limit_info, user_id)
+    return UserLimitInfoResponse(**limit_info) 

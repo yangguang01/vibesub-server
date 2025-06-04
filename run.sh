@@ -19,4 +19,4 @@ fi
 
 # 启动应用
 echo "启动API服务..."
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 
+uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000 

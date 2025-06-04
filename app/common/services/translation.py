@@ -3,7 +3,6 @@ import json
 import asyncio
 import re
 import yt_dlp
-import replicate
 import datetime
 
 from pathlib import Path
@@ -148,121 +147,101 @@ async def get_video_info_and_download_async(url, file_path):
     return video_data
 
 
-def get_video_info_and_download(url, file_path):
-        logger.info("任务开始! 音频下载中...")
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'format': 'bestaudio[ext=webm]',
-            'outtmpl': str(file_path),
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-            'force_ipv4': True,
-            #'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
-        }
-        if PROXY_URL:
-            ydl_opts['proxy'] = PROXY_URL
-            logger.info(f"使用代理: {PROXY_URL}")
-
-        print(file_path)
-        logger.info(f"开始下载视频: {url}")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-        
-        # 处理并返回视频信息
-        video_data = {
-            'title': info.get('title', 'Unknown'),
-            'id': info.get('id', ''),  # 提取视频ID
-            'channel': info.get('channel', 'Unknown'), 
-            'duration': info.get('duration', 0),
-            # 其他需要的信息...
-        }
-        logger.info(f"视频下载完成: {file_path}")
-        return video_data
-
-
-async def transcribe_audio(file_path):
+def get_video_info_and_download(url):
     """
-    使用 Replicate 的 Whisper 模型将音频文件转换为文本（异步版本）
-    
-    参数:
-        file_path (Path): 音频文件路径
-        
-    返回:
-        dict: 转写结果
+    从 YouTube 下载音频到当前工作目录，文件名为 <video_id>.webm，
+    并返回视频信息和下载后的文件名。
+
+    Args:
+        url (str): YouTube 视频链接
+
+    Returns:
+        tuple:
+            video_data (dict): 包含 title, id, channel
+            filename (str): 下载到本地的文件名 (例如 "abc123.webm")
     """
+    logger.info("任务开始！音频下载中...")
+
+    # 直接在当前目录下，以视频 ID 作为文件名，后缀由 format 决定（这里固定 webm）
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'format': 'bestaudio[ext=webm]',
+        'outtmpl': '%(id)s.%(ext)s',
+        'http_headers': {
+            'User-Agent': (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+        },
+        'force_ipv4': True,
+    }
+    if PROXY_URL:
+        ydl_opts['proxy'] = PROXY_URL
+        logger.info(f"使用代理: {PROXY_URL}")
+
+    logger.info(f"开始下载视频: {url}")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        # ydl.prepare_filename 会使用 outtmpl 规则，返回实际写入的文件路径
+        filepath = ydl.prepare_filename(info)
+
+    video_id = info.get('id', '')
+    # filepath 可能包含路径，这里只取文件名
+    filename = os.path.basename(filepath)
+
+    video_data = {
+        'title': info.get('title', 'Unknown'),
+        'id': video_id,
+        'channel': info.get('channel', 'Unknown'),
+    }
+
+    logger.info(f"视频下载完成: {filename}")
+    return video_data, filename
+
+
+def transcribe_audio_with_assemblyai(filename: str) -> list:
+    """
+    使用 AssemblyAI 转录当前工作目录下的音频文件，
+    文件名直接传入（例如 'abc123.webm'），返回句子列表。
+
+    Args:
+        filename (str): 当前目录下的音频文件名
+
+    Returns:
+        List[Sentence]: AssemblyAI 返回的句子对象列表
+    """
+    # 1. 检查文件是否存在
+    filepath = os.path.abspath(filename)
+    if not os.path.isfile(filepath):
+        raise FileNotFoundError(f"找不到音频文件: {filepath}")
+
+    # 2. 获取并设置 API Key
+    api_key = ASSEMBLYAI_API_KEY
+    if not api_key:
+        raise ValueError(f"未找到环境变量 请确保已设置API密钥")
+
+    logger.info(f"开始使用 AssemblyAI 转录音频: {filename}")
+
+    # 3. 新建转录器并上传文件
+    transcriber = aai.Transcriber()
     try:
-        logger.info(f"开始异步转写音频: {file_path}")
-        
-        # 设置环境变量
-        os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
-        
-        # 定义模型版本
-        model_version = "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af"
-        
-        logger.info("正在异步调用Replicate API进行音频转写，可能需要较长时间...")
-        
-        with open(file_path, "rb") as audio_file:
-            input_data = {
-                "file": audio_file,
-                "prompt": "",
-                "language": "en",
-                "num_speakers": 2
-            }
-            
-            logger.info("开始异步上传音频文件并等待转写结果...")
-            
-            # 使用异步API运行模型
-            output = await replicate.async_run(
-                model_version,
-                input=input_data
-            )
-            
-        logger.info("异步音频转写完成")
-        return output
+        # 直接把文件路径传给 SDK，让它处理上传和转写
+        transcript = transcriber.transcribe(filepath)
     except Exception as e:
-        logger.error(f"异步转写失败: {str(e)}", exc_info=True)
+        logger.error(f"转写失败: {e}", exc_info=True)
         raise
 
-async def transcribe_audio_with_assemblyai(file_path):
-    """
-    使用AssemblyAI转录音频文件，API密钥从环境变量获取
-    
-    参数:
-        audio_file_path (str, optional): 本地音频文件路径
-        audio_url (str, optional): 远程音频文件URL
-        env_key_name (str, optional): 存储API密钥的环境变量名称，默认为"ASSEMBLYAI_API_KEY"
-        
-    返回:
-        list: 转录的句子列表
-    """
-    
+    logger.info("音频转写完成")
+
+    # 4. 提取并返回句子列表
     try:
-        logger.info(f"开始使用AssemblyAI 异步转写音频: {file_path}")
-        # 从环境变量获取API密钥
-        api_key = ASSEMBLYAI_API_KEY
-        if not api_key:
-            raise ValueError(f"未找到环境变量 请确保已设置API密钥")
-        
-        # 设置API密钥
-        aai.settings.api_key = api_key
-        
-        # 创建转录器对象
-        transcriber = aai.Transcriber()
-        
-        # 开始转录
-        with open(file_path, 'rb') as audio_file:
-            file_content = audio_file.read()
-            transcript = transcriber.transcribe(file_content)
-        
-        logger.info("异步音频转写完成")
-        # 获取转录的句子
-        return transcript.get_sentences()
-    
-    except Exception as e:
-        logger.error(f"异步转写失败: {str(e)}", exc_info=True)
-        raise
+        sentences = transcript.get_sentences()
+    except AttributeError:
+        # 如果 SDK 版本稍有不同，也可尝试 transcript.sentences
+        sentences = getattr(transcript, "sentences", [])
+    return sentences
 
 def convert_AssemblyAI_to_srt(sentences):
     """
@@ -546,8 +525,6 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
         first_item_number = chunk[0][0] if chunk else "N/A"
         end_item_number = first_item_number + check_chunk_string - 1
         
-        logger.info(f"个性化提示词: {custom_prompt}")
-        
         # 格式化系统提示模板
         trans_json_user_prompt = system_prompt_template.format(
             custom_prompt=custom_prompt,
@@ -623,7 +600,7 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
                     check_retry = len(retrytrans_to_json)
                     if check_retry == check_chunk_string:
                         # 处理成功重试
-                        logger.info("编号{first_item_number}重试有效！")
+                        logger.info(f"编号{first_item_number}重试有效！")
                         
                         # 对翻译后的字符串进行处理
                         new_num_dict = process_transdict_num(retrytrans_to_json, first_item_number, end_item_number)
@@ -859,80 +836,80 @@ def format_subtitles_v2(subtitles_dict):
     return formatted_str
 
 # 250403更新：发现两个没有用的函数
-async def robust_transcribe(file_path, max_attempts=3):
-    """
-    带有重试机制的音频转写函数，处理各种超时和网络错误（异步版本）
+# async def robust_transcribe(file_path, max_attempts=3):
+#     """
+#     带有重试机制的音频转写函数，处理各种超时和网络错误（异步版本）
     
-    参数:
-        file_path (Path): 音频文件路径
-        max_attempts (int): 最大重试次数
+#     参数:
+#         file_path (Path): 音频文件路径
+#         max_attempts (int): 最大重试次数
         
-    返回:
-        dict: 转写结果
-    """
-    # 定义可以重试的异常类型
-    retriable_exceptions = (
-        httpx.ReadTimeout, 
-        httpx.ConnectTimeout,
-        httpx.ReadError,
-        httpx.NetworkError,
-        ConnectionError,
-        TimeoutError
-    )
+#     返回:
+#         dict: 转写结果
+#     """
+#     # 定义可以重试的异常类型
+#     retriable_exceptions = (
+#         httpx.ReadTimeout, 
+#         httpx.ConnectTimeout,
+#         httpx.ReadError,
+#         httpx.NetworkError,
+#         ConnectionError,
+#         TimeoutError
+#     )
     
-    # 重试装饰器（异步版本）
-    current_attempt = 0
-    last_exception = None
+#     # 重试装饰器（异步版本）
+#     current_attempt = 0
+#     last_exception = None
     
-    while current_attempt < max_attempts:
-        try:
-            logger.info(f"开始转写尝试 {current_attempt+1}/{max_attempts}...")
-            return await transcribe_audio(file_path)
-        except retriable_exceptions as e:
-            current_attempt += 1
-            last_exception = e
-            wait_time = min(2 ** current_attempt, 60)  # 指数退避
-            logger.info(f"第 {current_attempt}/{max_attempts} 次尝试失败，等待 {wait_time} 秒后重试...")
-            await asyncio.sleep(wait_time)
-        except Exception as e:
-            # 非重试类型异常，直接抛出
-            logger.error(f"转写失败，遇到非重试类型异常: {str(e)}", exc_info=True)
-            raise
+#     while current_attempt < max_attempts:
+#         try:
+#             logger.info(f"开始转写尝试 {current_attempt+1}/{max_attempts}...")
+#             return await transcribe_audio(file_path)
+#         except retriable_exceptions as e:
+#             current_attempt += 1
+#             last_exception = e
+#             wait_time = min(2 ** current_attempt, 60)  # 指数退避
+#             logger.info(f"第 {current_attempt}/{max_attempts} 次尝试失败，等待 {wait_time} 秒后重试...")
+#             await asyncio.sleep(wait_time)
+#         except Exception as e:
+#             # 非重试类型异常，直接抛出
+#             logger.error(f"转写失败，遇到非重试类型异常: {str(e)}", exc_info=True)
+#             raise
     
-    # 如果所有尝试都失败
-    logger.error(f"所有转写尝试均失败: {str(last_exception)}", exc_info=True)
-    # 重新抛出异常，让调用者处理
-    raise last_exception or Exception("最大重试次数已用尽")
+#     # 如果所有尝试都失败
+#     logger.error(f"所有转写尝试均失败: {str(last_exception)}", exc_info=True)
+#     # 重新抛出异常，让调用者处理
+#     raise last_exception or Exception("最大重试次数已用尽")
 
 # 250403更新：发现两个没有用的函数
 # 修改处理音频接口的调用方式
-async def process_audio(audio_path, output_dir, content_name, custom_prompt="", special_terms=""):
-    """
-    处理音频文件，包括转写和翻译
+# async def process_audio(audio_path, output_dir, content_name, custom_prompt="", special_terms=""):
+#     """
+#     处理音频文件，包括转写和翻译
     
-    参数:
-        audio_path (Path): 音频文件路径
-        output_dir (Path): 输出目录
-        content_name (str): 内容名称
-        custom_prompt (str): 自定义提示
-        special_terms (str): 特殊术语
+#     参数:
+#         audio_path (Path): 音频文件路径
+#         output_dir (Path): 输出目录
+#         content_name (str): 内容名称
+#         custom_prompt (str): 自定义提示
+#         special_terms (str): 特殊术语
         
-    返回:
-        dict: 处理结果
-    """
-    try:
-        # 使用带重试功能的转写函数
-        transcription = await robust_transcribe(audio_path, max_attempts=3)
+#     返回:
+#         dict: 处理结果
+#     """
+#     try:
+#         # 使用带重试功能的转写函数
+#         transcription = await robust_transcribe(audio_path, max_attempts=3)
                 
-        # 继续后续处理...
-        # ...
+#         # 继续后续处理...
+#         # ...
         
-        # 后续代码保持不变
-        # ...
+#         # 后续代码保持不变
+#         # ...
         
-    except Exception as e:
-        logger.error(f"处理音频失败: {str(e)}", exc_info=True)
-        raise 
+#     except Exception as e:
+#         logger.error(f"处理音频失败: {str(e)}", exc_info=True)
+#         raise 
 
 
 #async def split_long_chinese_sentence_v3(chinese_timeranges_dict, model='deepseek-chat'):

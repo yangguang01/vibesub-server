@@ -38,3 +38,11 @@ TRANSCRIPTS_RETENTION_DAYS = int(os.getenv("TRANSCRIPTS_RETENTION_DAYS", "7"))
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))
 RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "2"))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50")) 
+
+# 用量限制
+DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "5"))
+
+# pubsub配置
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC", "video-translation-tasks")
+PUBSUB_SUBSCRIPTION = os.getenv("PUBSUB_SUBSCRIPTION", "video-translation-tasks-sub")

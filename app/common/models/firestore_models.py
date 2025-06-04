@@ -1,9 +1,14 @@
 from datetime import datetime, timezone
+from fastapi import HTTPException
 import pytz
 from typing import Dict, Any, List, Optional, Union
-from app.common.services.firestore import db
+from app.common.utils.firestore_init import db
 from app.common.core.logging import logger
 from google.cloud.firestore_v1.base_query import FieldFilter
+from google.cloud import firestore
+from google.cloud.firestore_v1 import Increment, ArrayUnion, SERVER_TIMESTAMP
+from google.api_core.exceptions import NotFound
+from app.common.core.config import DEFAULT_DAILY_LIMIT
 
 
 # 集合名称常量
@@ -11,26 +16,13 @@ TASKS_COLLECTION = "tasks"
 USER_TASKS_COLLECTION = "user_tasks"
 ANALYTICS_COLLECTION = "analytics"
 
+# 集合名称常量
+USERINFO_COLLECTION = "userinfo"
 
-def get_beijing_time(utc_dt: Optional[datetime] = None) -> str:
-    """
-    获取北京时间格式化字符串
-    
-    参数:
-        utc_dt: UTC时间，如果为None则使用当前时间
-        
-    返回:
-        str: 格式化的北京时间字符串 (YYYY-MM-DD HH:MM:SS)
-    """
-    if utc_dt is None:
-        utc_dt = datetime.now(timezone.utc)
-    elif utc_dt.tzinfo is None:
-        # 如果没有时区信息，假定是UTC
-        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
-        
-    beijing_tz = pytz.timezone('Asia/Shanghai')
-    beijing_dt = utc_dt.astimezone(beijing_tz)
-    return beijing_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def _format_beijing(utc_dt: datetime) -> str:
+    beijing = pytz.timezone("Asia/Shanghai")
+    return utc_dt.replace(tzinfo=pytz.utc).astimezone(beijing).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_date_string(dt: Optional[datetime] = None) -> str:
@@ -73,7 +65,7 @@ def save_task(task_id: str, task_data: Dict[str, Any], video_id: Optional[str] =
         
         # 确保有时间戳
         now = datetime.now(timezone.utc)
-        now_beijing = get_beijing_time(now)
+        now_beijing = _format_beijing(now)
         
         if "created_at" not in task_data:
             task_data["created_at"] = now
@@ -260,6 +252,8 @@ def get_user_tasks(user_id: str, limit: int = 10,
                  last_doc_id: str = None, status_filter: str = None) -> List[Dict[str, Any]]:
     """
     获取用户的任务列表，支持分页和状态过滤
+    以后用在dashboard页面，显示用户的翻译历史
+    不对用户开发
     
     参数:
         user_id: 用户ID
@@ -352,7 +346,7 @@ def update_user_task_stats(user_id: str, video_id: str, task_data: Dict[str, Any
             return True  # 匿名用户不更新统计
             
         now = datetime.now(timezone.utc)
-        now_beijing = get_beijing_time(now)
+        now_beijing = _format_beijing(now)
         date_string = get_date_string(now)
         
         # 获取用户文档
@@ -561,96 +555,96 @@ def update_analytics_stats(video_id: str, task_data: Dict[str, Any]) -> bool:
         return False
 
 
-def check_user_daily_limit(user_id: str) -> Dict[str, Any]:
-    """
-    检查用户是否超过每日限额
+# def check_user_daily_limit(user_id: str) -> Dict[str, Any]:
+#     """
+#     检查用户是否超过每日限额
     
-    参数:
-        user_id: 用户ID
+#     参数:
+#         user_id: 用户ID
         
-    返回:
-        Dict: 包含以下字段:
-            - has_limit: 是否有限制
-            - limit_exceeded: 是否超过限额
-            - daily_limit: 每日限额
-            - used_today: 今日已用次数
-            - remaining: 剩余次数
-    """
-    try:
-        if not user_id or user_id == "anonymous":
-            # 匿名用户不限制
-            return {
-                "has_limit": False,
-                "limit_exceeded": False,
-                "daily_limit": 0,
-                "used_today": 0,
-                "remaining": 0
-            }
+#     返回:
+#         Dict: 包含以下字段:
+#             - has_limit: 是否有限制
+#             - limit_exceeded: 是否超过限额
+#             - daily_limit: 每日限额
+#             - used_today: 今日已用次数
+#             - remaining: 剩余次数
+#     """
+#     try:
+#         if not user_id or user_id == "anonymous":
+#             # 匿名用户不限制
+#             return {
+#                 "has_limit": False,
+#                 "limit_exceeded": False,
+#                 "daily_limit": 0,
+#                 "used_today": 0,
+#                 "remaining": 0
+#             }
             
-        date_string = get_date_string()
+#         date_string = get_date_string()
         
-        # 获取用户信息
-        user_ref = db.collection(USER_TASKS_COLLECTION).document(user_id)
-        user_doc = user_ref.get()
+#         # 获取用户信息
+#         user_ref = db.collection(USER_TASKS_COLLECTION).document(user_id)
+#         user_doc = user_ref.get()
         
-        if not user_doc.exists:
-            # 新用户，设置默认限额
-            return {
-                "has_limit": True,
-                "limit_exceeded": False,
-                "daily_limit": 3,  # 默认限额
-                "used_today": 0,
-                "remaining": 3
-            }
+#         if not user_doc.exists:
+#             # 新用户，设置默认限额
+#             return {
+#                 "has_limit": True,
+#                 "limit_exceeded": False,
+#                 "daily_limit": 3,  # 默认限额
+#                 "used_today": 0,
+#                 "remaining": 3
+#             }
             
-        user_data = user_doc.to_dict()
-        daily_limit = user_data.get("daily_limit", 3)
+#         user_data = user_doc.to_dict()
+#         daily_limit = user_data.get("daily_limit", 3)
         
-        # 如果用户没有限额
-        if daily_limit <= 0:
-            return {
-                "has_limit": False,
-                "limit_exceeded": False,
-                "daily_limit": 0,
-                "used_today": 0,
-                "remaining": 0
-            }
+#         # 如果用户没有限额
+#         if daily_limit <= 0:
+#             return {
+#                 "has_limit": False,
+#                 "limit_exceeded": False,
+#                 "daily_limit": 0,
+#                 "used_today": 0,
+#                 "remaining": 0
+#             }
             
-        # 获取今日使用情况
-        daily_ref = user_ref.collection("daily_usage").document(date_string)
-        daily_doc = daily_ref.get()
+#         # 获取今日使用情况
+#         daily_ref = user_ref.collection("daily_usage").document(date_string)
+#         daily_doc = daily_ref.get()
         
-        if not daily_doc.exists:
-            # 今日未使用
-            return {
-                "has_limit": True,
-                "limit_exceeded": False,
-                "daily_limit": daily_limit,
-                "used_today": 0,
-                "remaining": daily_limit
-            }
+#         if not daily_doc.exists:
+#             # 今日未使用
+#             return {
+#                 "has_limit": True,
+#                 "limit_exceeded": False,
+#                 "daily_limit": daily_limit,
+#                 "used_today": 0,
+#                 "remaining": daily_limit
+#             }
             
-        daily_data = daily_doc.to_dict()
-        used_today = daily_data.get("count", 0)
-        remaining = max(0, daily_limit - used_today)
+#         daily_data = daily_doc.to_dict()
+#         used_today = daily_data.get("count", 0)
+#         remaining = max(0, daily_limit - used_today)
         
-        return {
-            "has_limit": True,
-            "limit_exceeded": used_today >= daily_limit,
-            "daily_limit": daily_limit,
-            "used_today": used_today,
-            "remaining": remaining
-        }
-    except Exception as e:
-        logger.error(f"检查用户 {user_id} 每日限额失败: {str(e)}", exc_info=True)
-        # 失败时不限制用户
-        return {
-            "has_limit": False,
-            "limit_exceeded": False,
-            "daily_limit": 0,
-            "used_today": 0,
-            "remaining": 0
-        }
+#         return {
+#             "has_limit": True,
+#             "limit_exceeded": used_today >= daily_limit,
+#             "daily_limit": daily_limit,
+#             "used_today": used_today,
+#             "remaining": remaining
+#         }
+#     except Exception as e:
+#         logger.error(f"检查用户 {user_id} 每日限额失败: {str(e)}", exc_info=True)
+#         # 失败时不限制用户
+#         return {
+#             "has_limit": False,
+#             "limit_exceeded": False,
+#             "daily_limit": 0,
+#             "used_today": 0,
+#             "remaining": 0
+#         }
 
 
 def count_user_tasks(user_id: str, status_filter: str = None) -> int:
@@ -693,3 +687,370 @@ def count_user_tasks(user_id: str, status_filter: str = None) -> int:
     except Exception as e:
         logger.error(f"计算用户 {user_id} 的任务数量失败: {str(e)}", exc_info=True)
         return 0 
+    
+#0523 视频信息、用户信息、任务信息 3部分数据操作代码
+
+# 集合名称常量
+VIDEOINFO_COLLECTION = "videoinfo"
+USERINFO_COLLECTION = "userinfo"
+DAILY_SUBCOL = "daily_usage"
+HISTORY_SUBCOL = "video_history"
+USER_TASK_COLLECTION = "user_task"
+
+
+def _format_beijing_time(dt: datetime) -> str:
+    """将任意时间（UTC 或本地）转换为北京时间格式字符串"""
+    bj_tz = pytz.timezone("Asia/Shanghai")
+    
+    # 如果 dt 是 naive datetime（没有 tzinfo），默认它是 UTC
+    if dt.tzinfo is None:
+        dt = pytz.UTC.localize(dt)
+    
+    # 转换为北京时间
+    dt_bj = dt.astimezone(bj_tz)
+    
+    return dt_bj.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _video_ref(video_id: str):
+    """获取视频任务文档引用"""
+    return db.collection(VIDEOINFO_COLLECTION).document(video_id)
+
+
+def _user_ref(user_id: str):
+    """获取用户主文档引用"""
+    return db.collection(USERINFO_COLLECTION).document(user_id)
+
+
+def _daily_ref(user_id: str, date_str: str):
+    """获取用户当日使用量子集合文档引用"""
+    return _user_ref(user_id).collection(DAILY_SUBCOL).document(date_str)
+
+
+def _history_ref(user_id: str, video_id: str):
+    """获取用户视频历史子集合文档引用"""
+    return _user_ref(user_id).collection(HISTORY_SUBCOL).document(video_id)
+
+def _user_task_ref(task_id: str):
+    """获取用户任务文档引用"""
+    return db.collection(USER_TASK_COLLECTION).document(task_id)
+
+
+def create_or_update_video_task(
+    video_id: str,
+    youtube_url: str,
+    video_title: str,
+    user_id: str,
+    translation_strategies: Optional[List[str]] = None
+) -> None:
+    """
+    创建或更新视频任务文档：
+      - 已存在：请求计数自增、去重添加用户
+      - 不存在：初始化所有字段，包括状态、进度、时间戳等
+    """
+    strategies = translation_strategies or []
+    ref = _video_ref(video_id)
+    doc = ref.get()
+    now = datetime.now(timezone.utc)
+
+    if doc.exists:
+        # 文档已存在，原子增加计数并合并用户列表
+        ref.update({
+            "request_count": Increment(1),
+            "unique_users": ArrayUnion([user_id])
+        })
+    else:
+        # 新文档初始化所有字段
+        ref.set({
+            "video_id": video_id,
+            "youtube_url": youtube_url,
+            "video_title": video_title,
+            "status": "processing",       # 任务状态
+            "progress": 0.1,             # 任务进度
+            "translation_strategies": strategies,
+            "request_count": 1,
+            "unique_users": [user_id],
+            "asr_url": "",             # 转写结果 URL
+            "result_url": "",          # 翻译结果 URL
+            "error": "",               # 错误信息
+            "created_at": SERVER_TIMESTAMP,
+            "created_at_beijing": _format_beijing_time(now)
+        })
+
+
+def update_video_task(
+    video_id: str,
+    status: str,
+    progress: Optional[float] = None,
+    translation_strategies: Optional[List[str]] = None,
+    asr_url: Optional[str] = None,
+    result_url: Optional[str] = None,
+    error: Optional[str] = None
+) -> None:
+    """
+    更新视频任务的状态或其他字段，并记录更新时间：
+      - 状态、进度、策略、URL、错误等可选更新
+    """
+    ref = _video_ref(video_id)
+    now = datetime.now(timezone.utc)
+    updates: Dict[str, Any] = {
+        "status": status,                           # 新的任务状态
+        "updated_at": SERVER_TIMESTAMP,
+        "updated_at_beijing": _format_beijing_time(now)
+    }
+    # 根据是否提供参数，动态添加更新字段
+    if progress is not None:
+        updates["progress"] = progress
+    if translation_strategies is not None:
+        updates["translation_strategies"] = translation_strategies
+    if asr_url is not None:
+        updates["asr_url"] = asr_url
+    if result_url is not None:
+        updates["result_url"] = result_url
+    if error is not None:
+        updates["error"] = error
+
+    ref.update(updates)
+
+
+def get_video_task(video_id: str) -> Optional[Dict[str, Any]]:
+    """获取视频任务文档，返回字典或 None"""
+    snap = _video_ref(video_id).get()
+    return snap.to_dict() if snap.exists else None
+
+# def get_video_task(video_id: str) -> Optional[Dict[str, Any]]:
+#     """获取视频任务文档，返回字典或 None，并且注入 task_id"""
+#     snap = _video_ref(video_id).get()
+#     if not snap.exists:
+#         return None
+#     data = snap.to_dict()
+#     # 把文档的 ID (也就是 task_id) 加进来
+#     #data["task_id"] = snap.id
+#     return data
+
+
+def ensure_user(user_id: str, email: str) -> None:
+    """
+    创建或更新用户主文档：
+      - 新用户：初始化 email、总请求数、每日限额、创建/更新时间
+      - 老用户：仅更新活跃时间 updated_at
+    """
+    ref = _user_ref(email)
+    doc = ref.get()
+    payload = {"updated_at": SERVER_TIMESTAMP}
+    if not doc.exists:
+        payload.update({
+            "user_id": user_id,
+            "total_requests": 0,
+            "daily_limit": DEFAULT_DAILY_LIMIT,
+            "created_at": SERVER_TIMESTAMP
+        })
+        ref.set(payload, merge=True)
+    else:
+        ref.update(payload)
+
+
+def record_request(user_id: str, video_id: str, video_title: str) -> None:
+    """
+    在事务中：
+      1. 校验当天请求是否超限
+      2. 更新 daily_usage、total_requests
+      3. 更新或创建 video_history
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    user_ref = _user_ref(user_id)
+    daily_ref = _daily_ref(user_id, today)
+    history_ref = _history_ref(user_id, video_id)
+
+    def txn_fn(txn):
+        user_doc = txn.get(user_ref)
+        if not user_doc.exists:
+            raise NotFound(f"User {user_id} not found")
+
+        # 获取今日用量并递增
+        prev_daily = txn.get(daily_ref)
+        count = (prev_daily.get("count") if prev_daily.exists else 0) + 1
+        if count > user_doc.get("daily_limit"):
+            raise Exception("超出每日限制")
+
+        videos = prev_daily.get("videos", []) if prev_daily.exists else []
+        videos.append(video_id)
+
+        # 合并设置每日统计
+        txn.set(daily_ref, {
+            "count": count,
+            "videos": videos,
+            "date_timestamp": datetime.now(timezone.utc),
+            "updated_at": SERVER_TIMESTAMP
+        }, merge=True)
+
+        # 增加用户总请求数
+        txn.update(user_ref, {"total_requests": Increment(1), "updated_at": SERVER_TIMESTAMP})
+
+        # 更新或创建视频历史记录
+        hist = txn.get(history_ref)
+        if hist.exists:
+            txn.update(history_ref, {
+                "last_requested_at": SERVER_TIMESTAMP,
+                "request_count": Increment(1)
+            })
+        else:
+            txn.set(history_ref, {
+                "video_title": video_title,
+                "first_requested_at": SERVER_TIMESTAMP,
+                "last_requested_at": SERVER_TIMESTAMP,
+                "request_count": 1
+            })
+
+    # 执行事务
+    db.run_transaction(txn_fn)
+
+def check_user_daily_limit(user_id: str) -> bool:
+    """
+    检查用户是否超出每日请求限制（不做任何写操作）
+    """
+    # 1. 准备"今天"的日期串
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # 2. 读用户主文档
+    user_snap = _user_ref(user_id).get()
+    if not user_snap.exists:
+        raise NotFound(f"用户不存在：{user_id}")
+    user_data   = user_snap.to_dict() or {}
+    daily_limit = user_data.get("daily_limit", 3)
+
+    # 3. 读当天的子文档
+    daily_snap = _daily_ref(user_id, today).get()
+    if not daily_snap.exists:
+        count = 0
+    else:
+        # 转成 dict，再用 dict.get
+        daily_data = daily_snap.to_dict() or {}
+        count      = daily_data.get("count", 0)
+
+    # 4. 判断是否超限
+    return count < daily_limit
+
+
+def get_video_id_from_task(task_id: str) -> str:
+    """
+    根据 task_id 从 user_task 表中获取对应的 video_id
+    """
+    # 1. 获取 user_task 文档快照
+    snapshot = _user_task_ref(task_id).get()
+
+    # 2. 判断文档是否存在
+    if not snapshot.exists:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+
+    # 3. 转为字典并校验字段
+    data = snapshot.to_dict()
+    if not data or "video_id" not in data:
+        raise HTTPException(
+            status_code=500,
+            detail=f"任务 {task_id} 数据异常：缺少 video_id 字段"
+        )
+
+    # 4. 返回 video_id
+    return data["video_id"]
+
+
+def get_user_limit_info(user_id: str) -> Dict[str, Any]:
+    """
+    获取用户每日请求限制信息
+    """
+    # 1. 准备"今天"的日期串
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # 2. 读用户主文档获取每日上限
+    user_data = _user_ref(user_id).get().to_dict() or {}
+    daily_limit = user_data.get("daily_limit", DEFAULT_DAILY_LIMIT)
+
+    # 3. 读当天的子文档获取当日使用量
+    daily_data = _daily_ref(user_id, today).get().to_dict() or {}
+    used_today = daily_data.get("count", 0)
+
+    return {
+        "daily_limit": daily_limit,
+        "used_today": used_today
+    }
+
+def record_successful_request(user_id: str, video_id: str, video_title: str) -> None:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    user_ref = _user_ref(user_id)
+    daily_ref = _daily_ref(user_id, today)
+    history_ref = _history_ref(user_id, video_id)
+
+    @firestore.transactional
+    def txn_fn(transaction):
+        # 1. 先读取所有文档
+        user_doc   = next(transaction.get(user_ref))
+        prev_daily = next(transaction.get(daily_ref))
+        hist       = next(transaction.get(history_ref))
+
+        # 2. 从 snapshot 转为 dict，再安全取值
+        daily_data = prev_daily.to_dict() or {}
+        count      = daily_data.get("count", 0) + 1
+        videos     = daily_data.get("videos", [])
+        if video_id not in videos:
+            videos.append(video_id)
+
+        # 3. 开始写入操作
+        transaction.set(
+            daily_ref,
+            {
+                "count": count,
+                "videos": videos,
+                "date_timestamp": datetime.utcnow(),
+                "updated_at": SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+        transaction.update(
+            user_ref,
+            {"total_requests": Increment(1), "updated_at": SERVER_TIMESTAMP},
+        )
+
+        if hist.exists:
+            transaction.update(
+                history_ref,
+                {
+                    "last_requested_at": SERVER_TIMESTAMP,
+                    "request_count": Increment(1),
+                },
+            )
+        else:
+            transaction.set(
+                history_ref,
+                {
+                    "video_title": video_title,
+                    "first_requested_at": SERVER_TIMESTAMP,
+                    "last_requested_at": SERVER_TIMESTAMP,
+                    "request_count": 1,
+                },
+            )
+
+    txn = db.transaction()
+    txn_fn(txn)
+
+
+def create_user_task(
+    user_id: str,
+    video_id: str,
+    youtube_url: str,
+    task_id: str,
+    is_new: bool
+) -> None:
+    """
+    在 user_task 集合中记录用户任务
+    """
+    now = datetime.now(timezone.utc)
+    db.collection(USER_TASK_COLLECTION).document(task_id).set({
+        "user_id": user_id,
+        "video_id": video_id,
+        "youtube_url": youtube_url,
+        "task_id": task_id,
+        "is_new": is_new,
+        "created_at": SERVER_TIMESTAMP,
+        "created_at_beijing": _format_beijing_time(now)
+    })

@@ -1,4 +1,5 @@
 from pydantic import BaseModel, HttpUrl, Field
+from typing import Literal
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
@@ -18,20 +19,27 @@ class TaskResponse(BaseModel):
     """任务响应模型"""
     task_id: str
     status: str
+    message: Optional[str] = None
 
+
+# class TaskStatus(BaseModel):
+#     """任务状态模型"""
+#     status: str
+#     progress: Optional[float] = None
+#     #result_url: Optional[str] = None
+#     #error: Optional[str] = None
 
 class TaskStatus(BaseModel):
-    """任务状态模型"""
-    status: str
-    progress: Optional[float] = None
-    result_url: Optional[str] = None
-    error: Optional[str] = None
-    video_title: Optional[str] = None
+    video_id: str = Field(..., description="任务ID")
+    status: Literal["pending", "processing", "strategies_ready", "asr_ready", "translating", "completed", "failed"] = Field(..., description="任务状态")
+    progress: float = Field(..., ge=0.0, le=1.0, description="任务进度，0到1之间的小数")
+
+
 
 
 class TranslationStrategiesResponse(BaseModel):
     """翻译策略响应模型"""
-    strategies: Optional[List[str]] = None
+    strategies: Optional[List[str]] = None 
 
 
 class TaskDetail(BaseModel):
@@ -94,6 +102,12 @@ class UserDailyLimitResponse(BaseModel):
     daily_limit: int
     used_today: int
     remaining: int
+
+
+class UserLimitInfoResponse(BaseModel):
+    """用户限制信息响应模型"""
+    daily_limit: int
+    used_today: int
 
 
 class UsageStatItem(BaseModel):
