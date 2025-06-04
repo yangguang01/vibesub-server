@@ -26,7 +26,7 @@ init_firebase()
 app = FastAPI(
     title="YouTube字幕翻译API",
     description="将YouTube视频字幕翻译为中文的API服务",
-    version="0.1.0"
+    version=" 1.0"
 )
 
 

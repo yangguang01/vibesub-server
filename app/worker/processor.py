@@ -55,14 +55,6 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
         # 获取配置的默认 bucket
         bucket = storage.bucket()  # 获取上面配置的默认 bucket
 
-        # # 进度0.1：写入视频任务信息到Firestore
-        # create_or_update_video_task(
-        #     video_id=video_id,
-        #     video_title=content_name,
-        #     youtube_url=youtube_url,
-        #     user_id=user_id,
-        # )
-
         # 进度0.3：开始下载音频
         logger.info("开始下载音频...")
         video_info, filename = await loop.run_in_executor(executor, get_video_info_and_download, youtube_url)
