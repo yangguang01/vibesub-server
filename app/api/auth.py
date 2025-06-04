@@ -57,9 +57,9 @@ async def session_login(data: SessionLoginRequest, response: Response):
         value=session_cookie,
         #domain=".rxaigc.com",
         domain="localhost",
-        secure=False,
+        secure=True,
         httponly=True,
-        samesite="lax",
+        samesite="none",
         max_age=int(expires_in.total_seconds())
     )
     logger.info(f"设置会话 Cookie 成功: {session_cookie}")
