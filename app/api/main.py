@@ -60,8 +60,6 @@ async def validation_exception_handler(request: Request, exc: ValidationError):
 # 添加路由
 app.include_router(api_router, prefix=API_PREFIX)
 
-# 挂载静态文件目录
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 应用启动事件
 @app.on_event("startup")
