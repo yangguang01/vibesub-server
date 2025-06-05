@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 import base64, json, asyncio
-from app.worker.processor import process_translation_task  # 你的核心业务逻辑
+from app.worker.processor import create_translation_task  # 你的核心业务逻辑
 
 router = APIRouter()
 
@@ -20,5 +20,5 @@ async def pubsub_push(request: Request):
         raise HTTPException(400, f"Bad message format: {e}")
 
     # 异步调度，不阻塞 HTTP ack
-    asyncio.create_task(process_translation_task(**payload))
+    asyncio.create_task(create_translation_task(**payload))
     return {"status": "ok"}

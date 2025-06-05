@@ -130,7 +130,7 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
             await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0, error = str(e))
         
 
-def create_translation_task(
+async def create_translation_task(
     youtube_url, 
     user_id,
     video_id,
