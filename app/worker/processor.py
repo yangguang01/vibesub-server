@@ -1,14 +1,11 @@
 import os
 import json
 import asyncio
-from pathlib import Path
-from datetime import datetime
 from firebase_admin import storage
 from app.common.utils.executor import executor
 from app.common.utils.firebase_storage_init import *
 from app.common.core.logging import logger
 from app.common.services.translation import (
-    get_video_info,
     json_to_srt,
     extract_asr_sentences,
     subtitles_to_dict,
@@ -23,9 +20,7 @@ from app.common.services.translation import (
     convert_AssemblyAI_to_srt,
     get_video_context_from_llm,
     process_video_context_data,
-    get_video_info_and_download_async
 )
-from app.common.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
 from app.common.models.firestore_models import get_task, create_or_update_video_task, update_video_task, record_successful_request
 from app.common.services.storage import bucket
 
@@ -67,11 +62,11 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
         llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
         video_context_data = await llm_context_task
         video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
-        await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, translation_strategies = trans_strategies)
+        await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
 
         # 进度0.6：进行ASR处理
         logger.info("开始ASR处理...")
-        asr_result = await loop.run_in_executor(executor, _with_assemblyai, filename)
+        asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
         srt_text = convert_AssemblyAI_to_srt(asr_result)
         # 异步上传英文字幕到Firebase Storage
         def upload_srt_to_storage():
@@ -83,7 +78,7 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
             return english_srt_blob.public_url  # 返回上传后的URL
         # 放入线程池执行
         upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
-        await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5, asr_url = upload_url)
+        await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
 
         # 进度0.8：开始翻译
         #将短句子合并为长句子
@@ -121,13 +116,13 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
         # 放入线程池执行
         chinese_srt_url = await loop.run_in_executor(executor, upload_chinese_srt_to_storage)
         logger.info("任务完成,更新任务状态")
-        await loop.run_in_executor(executor, update_video_task, video_id, "completed", 1, result_url = chinese_srt_url)
+        await loop.run_in_executor(executor, update_video_task, video_id, "completed", 1)
         logger.info("写入用户请求记录")
         await loop.run_in_executor(executor, record_successful_request, user_id, video_id, video_title)
 
     except Exception as e:
             logger.error(f"任务 {video_id} 处理失败: {str(e)}", exc_info=True)
-            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0, error = str(e))
+            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0, trans_strategies, str(e))
         
 
 async def create_translation_task(
@@ -167,7 +162,7 @@ async def create_translation_task(
 
     
     # 创建异步任务
-    result = await process_translation_task(
+    await process_translation_task(
             video_id=video_id,
             youtube_url=youtube_url,
             special_terms=special_terms,

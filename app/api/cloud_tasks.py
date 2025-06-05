@@ -26,7 +26,7 @@ async def process_translation_task(request: Request):
         
         # 🔥 直接同步调用，不使用 asyncio.create_task
         # 因为这里就是实际的工作端点，需要等待完成
-        result = await create_translation_task(**payload)
+        await create_translation_task(**payload)
         
         logger.info(f"✅ 翻译任务完成: {video_id}")
         

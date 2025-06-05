@@ -13,8 +13,7 @@ from app.common.models.schemas import (
 from app.worker.processor import create_translation_task, get_task_status, get_task_translation_strategies
 from app.common.services.firestore import db
 from app.common.models.firestore_models import (
-    get_task, get_user_tasks, count_user_tasks, check_user_daily_limit,
-    update_user_task_stats, get_video_task, create_user_task, create_or_update_video_task, update_video_task, record_successful_request, get_user_limit_info, get_video_id_from_task
+    get_task, get_user_tasks, count_user_tasks, check_user_daily_limit, get_video_task, create_user_task, create_or_update_video_task, update_video_task, record_successful_request, get_user_limit_info, get_video_id_from_task
 )
 from app.common.utils.auth import verify_firebase_session, get_current_user_id
 from app.common.core.logging import logger
