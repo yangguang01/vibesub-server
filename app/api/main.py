@@ -34,10 +34,17 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     #allow_origins=["*"],  # 允许所有来源，生产环境应该限制
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["https://auth.rxaigc.com", "http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # 明确指定
+    allow_headers=[
+        "Accept",
+        "Accept-Language", 
+        "Content-Language",
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With"
+    ],
 )
 
 # 全局异常处理

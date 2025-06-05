@@ -55,7 +55,7 @@ async def session_login(data: SessionLoginRequest, response: Response):
     response.set_cookie(
         key="session",
         value=session_cookie,
-        #domain=".rxaigc.com",
+        domain=".rxaigc.com",
         #domain="localhost",
         secure=True,
         httponly=True,
