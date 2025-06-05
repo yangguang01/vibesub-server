@@ -5,15 +5,13 @@ from typing import Dict, Any
 from google.cloud import tasks_v2
 import uuid
 
-from app.common.core.config import GOOGLE_CLOUD_PROJECT
+from app.common.core.config import GOOGLE_CLOUD_PROJECT, SERVICE_URL
 
 logger = logging.getLogger(__name__)
 
 # 配置常量
-PROJECT_ID = "tube-trans"
 LOCATION = "us-west1"
 QUEUE_NAME = "vibesub-queue"
-SERVICE_URL = "https://tube-trans-server-v2-565406642878.us-west1.run.app"  # 替换为你的实际URL
 
 class CloudTasksManager:
     def __init__(self):
