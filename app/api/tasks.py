@@ -86,8 +86,7 @@ async def translate_video(request: TranslationRequest, user_id: str = Depends(ge
         "video_id": video_id,
         "content_name": request.content_name,
         "special_terms": request.special_terms or "",
-        "model": request.model or "",
-        "task_id": task_id  # 添加 task_id 供后续使用
+        "model": request.model or ""
     }
     
     # 后台异步创建 Cloud Task，不等待结果（保持原有响应速度）
