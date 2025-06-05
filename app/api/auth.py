@@ -69,11 +69,11 @@ async def session_login(data: SessionLoginRequest, response: Response):
 async def session_logout(response: Response):
     response.delete_cookie(
         key="session",
-        #domain=".rxaigc.com",
-        domain="localhost",
-        secure=False,
+        domain=".rxaigc.com",
+        #domain="localhost",
+        secure=True,
         httponly=True,
-        samesite="lax",
+        samesite="none",
     )
     return {"status": "success"}
 
