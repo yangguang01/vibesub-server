@@ -19,7 +19,6 @@ from app.common.models.firestore_models import (
 from app.common.utils.auth import verify_firebase_session, get_current_user_id
 from app.common.core.logging import logger
 from app.common.utils.youtube import extract_video_id, get_video_id_by_yt_dlp
-from app.common.utils.pubsub_client import publish_translation_task
 from app.common.utils.cloud_tasks import create_translation_cloud_task_safe
 
 router = APIRouter()
