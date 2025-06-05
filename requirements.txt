@@ -4,7 +4,6 @@ fastapi>=0.115.0
 firebase_admin
 google-auth
 google-cloud-firestore
-google-cloud-pubsub
 google-cloud-storage
 nest-asyncio>=1.6.0
 openai
@@ -15,3 +14,4 @@ pytz
 tenacity>=9.0.0
 uvicorn
 yt-dlp
+google-cloud-tasks

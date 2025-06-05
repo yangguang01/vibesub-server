@@ -46,3 +46,6 @@ DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "5"))
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC", "video-translation-tasks")
 PUBSUB_SUBSCRIPTION = os.getenv("PUBSUB_SUBSCRIPTION", "video-translation-tasks-sub")
+
+#Firebase
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")

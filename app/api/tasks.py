@@ -20,6 +20,7 @@ from app.common.utils.auth import verify_firebase_session, get_current_user_id
 from app.common.core.logging import logger
 from app.common.utils.youtube import extract_video_id, get_video_id_by_yt_dlp
 from app.common.utils.pubsub_client import publish_translation_task
+from app.common.utils.cloud_tasks import create_translation_cloud_task_safe
 
 router = APIRouter()
 
@@ -78,19 +79,37 @@ async def translate_video(request: TranslationRequest, user_id: str = Depends(ge
         executor, create_user_task, user_id, video_id, youtube_url, task_id, True
     )
 
-    # 测试代码
-    # pubsub测试未完成
-    logger.info("新视频，通过pubsub下发任务")
+    # 关键修改：替换 pubsub 为 Cloud Tasks
+    logger.info("新视频，通过Cloud Tasks下发任务")
     payload = {
         "youtube_url": youtube_url,
         "user_id": user_id,
         "video_id": video_id,
         "content_name": request.content_name,
         "special_terms": request.special_terms or "",
-        "model": request.model or ""
+        "model": request.model or "",
+        "task_id": task_id  # 添加 task_id 供后续使用
     }
-    publish_translation_task(payload)
+    
+    # 后台异步创建 Cloud Task，不等待结果（保持原有响应速度）
+    asyncio.create_task(create_cloud_task_for_translation(payload, task_id))
+    
     return {"task_id": task_id, "status": "pending"}
+
+async def create_cloud_task_for_translation(payload: dict, task_id: str):
+    """
+    后台创建 Cloud Task 的函数
+    """
+    try:
+        logger.info(f"🚀 开始为任务 {task_id} 创建 Cloud Task")
+        
+        # 创建 Cloud Task
+        cloud_task_name = await create_translation_cloud_task_safe(payload)
+        
+        logger.info(f"✅ Cloud Task 创建成功: {cloud_task_name} for task {task_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Cloud Task 创建失败 for task {task_id}: {e}")
 
 
 @router.get("/{task_id}", response_model=TaskDetail)

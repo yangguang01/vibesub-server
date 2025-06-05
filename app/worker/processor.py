@@ -167,8 +167,7 @@ async def create_translation_task(
 
     
     # 创建异步任务
-    asyncio.create_task(
-        process_translation_task(
+    result = await process_translation_task(
             video_id=video_id,
             youtube_url=youtube_url,
             special_terms=special_terms,
@@ -177,7 +176,6 @@ async def create_translation_task(
             model=model,
             user_id=user_id
         )
-    )
     
     return video_id
 
