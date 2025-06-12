@@ -49,6 +49,8 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
     try:
         # 获取配置的默认 bucket
         bucket = storage.bucket()  # 获取上面配置的默认 bucket
+        # 初始化翻译策略
+        trans_strategies = []
 
         # 进度0.3：开始下载音频
         logger.info("开始下载音频...")
