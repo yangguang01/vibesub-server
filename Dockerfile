@@ -10,8 +10,9 @@ RUN apk add --no-cache build-base libffi-dev
 # 复制并安装 Python 依赖
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
+    pip install --no-cache-dir -r requirements.txt && \
+    # 安装并升级到最新 yt-dlp
+    pip install --no-cache-dir --upgrade yt-dlp
 
 # 复制整个 app 目录（包含 app/api/main.py 及其他模块）
 COPY app/ ./app/

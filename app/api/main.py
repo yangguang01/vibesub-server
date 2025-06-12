@@ -14,13 +14,16 @@ from app.common.utils.file_utils import create_directories
 from app.common.utils.cleanup import setup_cleanup_task
 from app.common.utils.firebase_init import init_firebase
 from app.common.utils.firebase_storage_init import *
-
+from app.common.utils.youtube import log_yt_dlp_version
 
 from dotenv import load_dotenv
 load_dotenv()  # 会加载 .env 文件中的 proxy 配置
 
 # 初始化 Firebase Admin SDK
 init_firebase()
+
+# 在 FastAPI 或启动脚本中调用一下
+log_yt_dlp_version()
 
 # 创建FastAPI应用
 app = FastAPI(

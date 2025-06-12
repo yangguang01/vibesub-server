@@ -1,4 +1,5 @@
 import yt_dlp
+import subprocess
 from urllib.parse import urlparse, parse_qs
 
 from app.common.core.logging import logger
@@ -47,3 +48,13 @@ def get_video_id_by_yt_dlp(youtube_url: str) -> str:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(youtube_url, download=False)
         return info.get('id')
+    
+import subprocess
+import logging
+
+def log_yt_dlp_version():
+    try:
+        version = subprocess.check_output(["yt-dlp", "--version"], text=True).strip()
+        logger.info(f"yt-dlp version: {version}")
+    except Exception as e:
+        logger.error(f"无法获取 yt-dlp 版本：{e}")
