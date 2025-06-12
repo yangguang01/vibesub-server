@@ -166,7 +166,7 @@ def get_video_info_and_download(url):
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
-        'format': 'bestaudio[ext=webm]',
+        'format': 'bestaudio[abr<=128]/bestaudio',
         'outtmpl': '%(id)s.%(ext)s',
         'http_headers': {
             'User-Agent': (

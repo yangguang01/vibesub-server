@@ -53,8 +53,28 @@ import subprocess
 import logging
 
 def log_yt_dlp_version():
+    # 1. log yt-dlp 版本
     try:
-        version = subprocess.check_output(["yt-dlp", "--version"], text=True).strip()
-        logger.info(f"yt-dlp version: {version}")
+        ytdlp_version = subprocess.check_output(
+            ["yt-dlp", "--version"],
+            stderr=subprocess.STDOUT,  # 捕获错误输出
+            text=True
+        ).strip()
+        logger.info(f"yt-dlp version: {ytdlp_version}")
     except Exception as e:
         logger.error(f"无法获取 yt-dlp 版本：{e}")
+
+    # 2. log ffmpeg 版本
+    try:
+        ffmpeg_output = subprocess.check_output(
+            ["ffmpeg", "-version"],
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        # 只取第一行，例如： "ffmpeg version 4.4.1 ..."
+        first_line = ffmpeg_output.splitlines()[0]
+        logger.info(f"ffmpeg version: {first_line}")
+    except FileNotFoundError:
+        logger.warning("ffmpeg 未安装或不在 PATH 中")
+    except Exception as e:
+        logger.error(f"无法获取 ffmpeg 版本：{e}")
