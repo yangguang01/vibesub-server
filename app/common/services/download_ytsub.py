@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from yt_dlp import YoutubeDL
 
+from app.common.core.config import PROXY_URL
 from app.common.core.logging import logger
 
 # ---------------- 可自行修改的全局配置 ----------------
@@ -28,6 +29,7 @@ PROXY_URL: str | None = None               # 例如 "socks5://127.0.0.1:1080"
 
 def _probe_video(url: str) -> dict:
     """仅探测视频元数据，不下载任何文件。"""
+    logger.info(f"开始探测视频信息: {url}")
     ydl_opts = {"skip_download": True, "quiet": True}
     if PROXY_URL:
         ydl_opts["proxy"] = PROXY_URL
