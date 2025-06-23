@@ -31,6 +31,7 @@ def _probe_video(url: str) -> dict:
     ydl_opts = {"skip_download": True, "quiet": True}
     if PROXY_URL:
         ydl_opts["proxy"] = PROXY_URL
+        logger.info(f"使用代理检测字幕信息: {PROXY_URL}")
     return YoutubeDL(ydl_opts).extract_info(url, download=False)
 
 
@@ -60,6 +61,7 @@ def _download_subtitle(url: str, ext: str) -> Optional[Path]:
     }
     if PROXY_URL:
         dl_opts["proxy"] = PROXY_URL
+        logger.info(f"使用代理下载字幕信息: {PROXY_URL}")
 
     with YoutubeDL(dl_opts) as ydl:
         result = ydl.extract_info(url, download=True)
