@@ -23,7 +23,6 @@ from app.common.core.logging import logger
 # ---------------- 可自行修改的全局配置 ----------------
 _LANG = "en"                               # 字幕语言
 _PRIORITY = ("json3", "srv3")              # 自动字幕格式优先级
-PROXY_URL: str | None = None               # 例如 "socks5://127.0.0.1:1080"
 # ------------------------------------------------------
 
 
