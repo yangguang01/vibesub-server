@@ -16,7 +16,6 @@ import assemblyai as aai
 
 from app.common.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY, ASSEMBLYAI_API_KEY,PROXY_URL
 from app.common.core.logging import logger
-from app.common.utils.file_utils import cleanup_audio_file
 
 
 def download_audio_webm(url, file_path):
@@ -1635,7 +1634,8 @@ def get_system_prompt_for_model(model):
         - Rearrange word order and adjust wording for complex sentence structures to ensure translations are easily understandable and fluent in Chinese.
 
         ### Skill 4: Proper Nouns and Special Terms
-        - Identify proper nouns and special terms enclosed in angle brackets < > within the subtitle text, and retain them in their original English form.
+        - Identify proper nouns and special terms enclosed in angle brackets
+         < > within the subtitle text, and retain them in their original English form.
 
         ## Constraints
         - For punctuation requirements: Do not add a period when the sentence ends

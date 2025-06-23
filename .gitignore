@@ -41,6 +41,11 @@ tmp/
 
 # 测试文件
 test_function.py
+test_specific_functions.py
+test/
+test*
+yt-asr-result-cn.srt
 
 # 文档
 project_docs/
+script/

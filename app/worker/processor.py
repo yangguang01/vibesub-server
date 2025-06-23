@@ -23,6 +23,8 @@ from app.common.services.translation import (
 )
 from app.common.models.firestore_models import get_task, create_or_update_video_task, update_video_task, record_successful_request
 from app.common.services.storage import bucket
+from app.common.services.download_ytsub import download_auto_subtitle
+from app.common.services.process_ytsub import process_ytsub
 
 
 # 全局存储任务状态 (临时存储，后续迁移到Firestore)
@@ -52,35 +54,78 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
         # 初始化翻译策略
         trans_strategies = []
 
-        # 进度0.3：开始下载音频
-        logger.info("开始下载音频...")
-        video_info, filename = await loop.run_in_executor(executor, get_video_info_and_download, youtube_url)
-        await loop.run_in_executor(executor, update_video_task, video_id, "processing", 0.2)
+        # 优先使用yt 自动生成的英文字幕
+        yt_sub_path, video_title, channel_name = download_auto_subtitle(youtube_url)
+        if yt_sub_path:
+            try:
+                srt_text = process_ytsub(yt_sub_path)
+                # 进度0.3：生成翻译策略
+                logger.info("开始生成翻译策略...")
+                llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
+                video_context_data = await llm_context_task
+                video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
+                await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                # 执行原始流程
+                logger.info("开始下载音频...")
+                video_info, filename = await loop.run_in_executor(executor, get_video_info_and_download, youtube_url)
+                await loop.run_in_executor(executor, update_video_task, video_id, "processing", 0.2)
 
-        # 进度0.4：生成翻译策略
-        logger.info("开始生成翻译策略...")
-        video_title = video_info.get('title', '')
-        channel_name = video_info.get('channel', '')
-        llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
-        video_context_data = await llm_context_task
-        video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
-        await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
+                # 进度0.4：生成翻译策略
+                logger.info("开始生成翻译策略...")
+                video_title = video_info.get('title', '')
+                channel_name = video_info.get('channel', '')
+                llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
+                video_context_data = await llm_context_task
+                video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
+                await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
 
-        # 进度0.6：进行ASR处理
-        logger.info("开始ASR处理...")
-        asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
-        srt_text = convert_AssemblyAI_to_srt(asr_result)
-        # 异步上传英文字幕到Firebase Storage
-        def upload_srt_to_storage():
-            english_srt_blob = bucket.blob(f"asr_srt/{video_id}.srt")
-            english_srt_blob.upload_from_string(
-                srt_text,
-                content_type="text/plain"
-            )
-            return english_srt_blob.public_url  # 返回上传后的URL
-        # 放入线程池执行
-        upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
-        await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
+                # 进度0.6：进行ASR处理
+                logger.info("开始ASR处理...")
+                asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
+                srt_text = convert_AssemblyAI_to_srt(asr_result)
+                # 异步上传英文字幕到Firebase Storage
+                def upload_srt_to_storage():
+                    english_srt_blob = bucket.blob(f"asr_srt/{video_id}.srt")
+                    english_srt_blob.upload_from_string(
+                        srt_text,
+                        content_type="text/plain"
+                    )
+                    return english_srt_blob.public_url  # 返回上传后的URL
+                # 放入线程池执行
+                upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
+                await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
+        else:
+            # 进度0.3：开始下载音频
+            logger.info("开始下载音频...")
+            video_info, filename = await loop.run_in_executor(executor, get_video_info_and_download, youtube_url)
+            await loop.run_in_executor(executor, update_video_task, video_id, "processing", 0.2)
+
+            # 进度0.4：生成翻译策略
+            logger.info("开始生成翻译策略...")
+            video_title = video_info.get('title', '')
+            channel_name = video_info.get('channel', '')
+            llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
+            video_context_data = await llm_context_task
+            video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
+            await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
+
+            # 进度0.6：进行ASR处理
+            logger.info("开始ASR处理...")
+            asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
+            srt_text = convert_AssemblyAI_to_srt(asr_result)
+            # 异步上传英文字幕到Firebase Storage
+            def upload_srt_to_storage():
+                english_srt_blob = bucket.blob(f"asr_srt/{video_id}.srt")
+                english_srt_blob.upload_from_string(
+                    srt_text,
+                    content_type="text/plain"
+                )
+                return english_srt_blob.public_url  # 返回上传后的URL
+            # 放入线程池执行
+            upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
+            await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
 
         # 进度0.8：开始翻译
         #将短句子合并为长句子
@@ -134,7 +179,7 @@ async def create_translation_task(
     content_name,
     special_terms="", 
     language="zh-CN", 
-    model=None, 
+    model="gpt", 
 ):
     """
     创建新的翻译任务
@@ -215,3 +260,7 @@ def get_task_translation_strategies(task_id):
         return {"strategies": task_data["trans_strategies"]}
     
     return None 
+
+if __name__ == "__main__":
+    # 测试代码
+    asyncio.run(create_translation_task("https://www.youtube.com/watch?v=DB9mjd-65gw", "007@qq.com", "DB9mjd-65gw", "Sam Altman on AGI, GPT-5, and what’s next — the OpenAI Podcast Ep. 1"))
