@@ -20,6 +20,8 @@ from app.common.services.translation import (
     convert_AssemblyAI_to_srt,
     get_video_context_from_llm,
     process_video_context_data,
+    save_debug_records_to_storage,
+    clear_debug_records,
 )
 from app.common.models.firestore_models import get_task, create_or_update_video_task, update_video_task, record_successful_request
 from app.common.services.storage import bucket
@@ -53,6 +55,10 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
         bucket = storage.bucket()  # 获取上面配置的默认 bucket
         # 初始化翻译策略
         trans_strategies = []
+        
+        # 清空之前的调试记录，开始记录当前任务
+        clear_debug_records()
+        logger.info(f"开始处理视频任务 {video_id}，调试记录已初始化")
 
         # 优先使用yt 自动生成的英文字幕
         yt_sub_path, video_title, channel_name = download_auto_subtitle(youtube_url)
@@ -137,7 +143,8 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
             video_context_prompt,
             model,
             special_terms,
-            content_name
+            content_name,
+            video_id
         )
         await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.85)
 
@@ -162,6 +169,12 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
             return chinese_srt_blob.public_url  # 可选：返回上传后的URL
         # 放入线程池执行
         chinese_srt_url = await loop.run_in_executor(executor, upload_chinese_srt_to_storage)
+        
+        # 保存调试记录到 Firebase Storage
+        debug_url = await save_debug_records_to_storage(video_id, bucket)
+        if debug_url:
+            logger.info(f"调试记录已保存: {debug_url}")
+        
         logger.info("任务完成,更新任务状态")
         await loop.run_in_executor(executor, update_video_task, video_id, "completed", 1)
         logger.info("写入用户请求记录")
@@ -169,6 +182,16 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
 
     except Exception as e:
             logger.error(f"任务 {video_id} 处理失败: {str(e)}", exc_info=True)
+            
+            # 即使任务失败，也保存调试记录以便排查问题
+            try:
+                bucket = storage.bucket()
+                debug_url = await save_debug_records_to_storage(video_id, bucket)
+                if debug_url:
+                    logger.info(f"任务失败，调试记录已保存: {debug_url}")
+            except Exception as debug_error:
+                logger.error(f"保存失败任务的调试记录时出错: {str(debug_error)}")
+                
             await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0, trans_strategies, str(e))
         
 

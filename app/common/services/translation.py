@@ -4,6 +4,7 @@ import asyncio
 import re
 import yt_dlp
 import datetime
+import threading
 
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -16,6 +17,98 @@ import assemblyai as aai
 
 from app.common.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY, ASSEMBLYAI_API_KEY,PROXY_URL
 from app.common.core.logging import logger
+
+# 全局调试记录存储
+debug_records = []
+debug_lock = threading.Lock()
+
+def add_debug_record(video_id, chunk_info, input_data, output_data, result_info, attempt_type="initial"):
+    """
+    添加调试记录到全局列表
+    
+    Args:
+        video_id: 视频ID
+        chunk_info: 块信息 (first_item_number, end_item_number, expected_lines)
+        input_data: 输入数据 (system_prompt, user_content)
+        output_data: 输出数据 (raw_response, parsed_json, actual_lines)
+        result_info: 结果信息 (success, line_count_match, error_message)
+        attempt_type: 尝试类型 ("initial", "retry")
+    """
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    record = f"""[{timestamp}] VIDEO: {video_id} | CHUNK: {chunk_info['first']}-{chunk_info['end']} | ATTEMPT: {attempt_type}
+INPUT_LINES: {chunk_info['expected']}
+{input_data['user_content']}
+---
+OUTPUT_LINES: {output_data.get('actual_lines', 'ERROR')}
+RAW_RESPONSE: {output_data.get('raw_response', 'ERROR')}
+---
+PARSED_OUTPUT:
+{output_data.get('formatted_output', 'ERROR')}
+---
+RESULT: {'SUCCESS' if result_info['success'] else 'FAILED'} ({chunk_info['expected']}→{output_data.get('actual_lines', '?')}) {result_info.get('error_message', '')}
+{'='*80}
+"""
+    
+    with debug_lock:
+        debug_records.append(record)
+
+def get_debug_records_text():
+    """
+    获取所有调试记录的文本内容
+    
+    Returns:
+        str: 格式化的调试记录文本
+    """
+    with debug_lock:
+        if not debug_records:
+            return "No debug records found.\n"
+        
+        header = f"""=== LLM Translation Debug Records ===
+Generated: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Total Records: {len(debug_records)}
+{'='*80}
+
+"""
+        return header + '\n'.join(debug_records)
+
+def clear_debug_records():
+    """清空调试记录"""
+    with debug_lock:
+        debug_records.clear()
+
+async def save_debug_records_to_storage(video_id, bucket):
+    """
+    将调试记录保存到 Firebase Storage
+    
+    Args:
+        video_id: 视频ID
+        bucket: Firebase Storage bucket 实例
+    
+    Returns:
+        str: 上传后的文件URL，如果没有记录则返回None
+    """
+    try:
+        debug_text = get_debug_records_text()
+        
+        # 如果没有调试记录，直接返回
+        if debug_text.strip() == "No debug records found.":
+            logger.info("没有调试记录需要保存")
+            return None
+        
+        # 上传到 Firebase Storage
+        debug_blob = bucket.blob(f"debug_records/{video_id}_translation_debug.txt")
+        debug_blob.upload_from_string(
+            debug_text,
+            content_type="text/plain; charset=utf-8"
+        )
+        
+        logger.info(f"调试记录已保存到 Firebase Storage: debug_records/{video_id}_translation_debug.txt")
+        return debug_blob.public_url
+        
+    except Exception as e:
+        logger.error(f"保存调试记录到 Firebase Storage 失败: {str(e)}", exc_info=True)
+        return None
 
 
 def download_audio_webm(url, file_path):
@@ -512,7 +605,7 @@ def generate_custom_prompt(video_title: str, channel_name: str, custom_prompt: s
     return full_custom_prompt
 
 # 250417更新
-async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt_template):
+async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt_template, video_id="unknown"):
     """处理单个翻译批次"""
     async with semaphore:
         result = {
@@ -531,6 +624,17 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
             end_item_number=end_item_number,
             check_chunk_string=check_chunk_string
         )
+        
+        # 准备调试记录的基础信息
+        chunk_info = {
+            'first': first_item_number,
+            'end': end_item_number,
+            'expected': check_chunk_string
+        }
+        input_data = {
+            'system_prompt': trans_json_user_prompt,
+            'user_content': chunk_string.strip()
+        }
         try:
             # 初次API调用
             response = await safe_api_call_async(
@@ -543,18 +647,59 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
             )
 
             translated_string = response.choices[0].message.content
-            trans_to_json = json.loads(translated_string)
+            
+            try:
+                trans_to_json = json.loads(translated_string)
+            except json.JSONDecodeError as e:
+                # JSON解析失败的调试记录
+                output_data = {
+                    'raw_response': translated_string[:500] + ("..." if len(translated_string) > 500 else ""),
+                    'actual_lines': 'JSON_ERROR',
+                    'formatted_output': f'JSON解析失败: {str(e)}'
+                }
+                result_info = {
+                    'success': False,
+                    'line_count_match': False,
+                    'error_message': f'JSON解析失败: {str(e)}'
+                }
+                add_debug_record(video_id, chunk_info, input_data, output_data, result_info, "initial")
+                raise
 
             # 行数检查
             check_translated = len(trans_to_json)
+            
+            # 格式化输出用于调试记录
+            formatted_output = '\n'.join(f"{k}: {v}" for k, v in trans_to_json.items())
+            
+            output_data = {
+                'raw_response': translated_string[:500] + ("..." if len(translated_string) > 500 else ""),
+                'actual_lines': check_translated,
+                'formatted_output': formatted_output
+            }
+            
             if check_chunk_string == check_translated:
                 logger.info(f'编号{first_item_number}一次性通过')
+                # 成功的调试记录
+                result_info = {
+                    'success': True,
+                    'line_count_match': True,
+                    'error_message': '一次通过'
+                }
+                add_debug_record(video_id, chunk_info, input_data, output_data, result_info, "initial")
+                
                 # 正常处理流程
                 new_num_dict = process_transdict_num(trans_to_json, first_item_number, end_item_number)
                 translated_dict = process_translated_string(new_num_dict)
                 result['translations'].update(translated_dict)
             else:
-                # 进入重试逻辑
+                # 进入重试逻辑，先记录初次失败
+                result_info = {
+                    'success': False,
+                    'line_count_match': False,
+                    'error_message': f'行数不匹配，进入重试逻辑'
+                }
+                add_debug_record(video_id, chunk_info, input_data, output_data, result_info, "initial")
+                
                 logger.info(f'编号{first_item_number}进入重试逻辑!!!')
                 retry_prompt_v2 = f'''
                 The previous translation had a mismatch (English: {check_chunk_string} lines, Chinese: {check_translated} lines).
@@ -592,14 +737,51 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
                     try:
                         retrytrans_to_json = json.loads(retry_translated_string)
                     except json.JSONDecodeError as e:
+                        # 重试JSON解析失败的调试记录
+                        retry_output_data = {
+                            'raw_response': retry_translated_string[:500] + ("..." if len(retry_translated_string) > 500 else ""),
+                            'actual_lines': 'JSON_ERROR',
+                            'formatted_output': f'重试JSON解析失败: {str(e)}'
+                        }
+                        retry_result_info = {
+                            'success': False,
+                            'line_count_match': False,
+                            'error_message': f'重试JSON解析失败: {str(e)}'
+                        }
+                        retry_input_data = {
+                            'system_prompt': trans_json_user_prompt,
+                            'user_content': retry_prompt_v2.strip()
+                        }
+                        add_debug_record(video_id, chunk_info, retry_input_data, retry_output_data, retry_result_info, "retry")
                         logger.error(f"重试响应JSON解析失败: {retry_translated_string}")
                         raise
 
                     # 重复行数检查
                     check_retry = len(retrytrans_to_json)
+                    
+                    # 准备重试的调试记录
+                    retry_formatted_output = '\n'.join(f"{k}: {v}" for k, v in retrytrans_to_json.items())
+                    retry_output_data = {
+                        'raw_response': retry_translated_string[:500] + ("..." if len(retry_translated_string) > 500 else ""),
+                        'actual_lines': check_retry,
+                        'formatted_output': retry_formatted_output
+                    }
+                    retry_input_data = {
+                        'system_prompt': trans_json_user_prompt,
+                        'user_content': retry_prompt_v2.strip()
+                    }
+                    
                     if check_retry == check_chunk_string:
                         # 处理成功重试
                         logger.info(f"编号{first_item_number}重试有效！")
+                        
+                        # 重试成功的调试记录
+                        retry_result_info = {
+                            'success': True,
+                            'line_count_match': True,
+                            'error_message': '重试成功'
+                        }
+                        add_debug_record(video_id, chunk_info, retry_input_data, retry_output_data, retry_result_info, "retry")
                         
                         # 对翻译后的字符串进行处理
                         new_num_dict = process_transdict_num(retrytrans_to_json, first_item_number, end_item_number)
@@ -607,6 +789,13 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
                         
                         result['translations'].update(translated_dict)
                     else:
+                        # 重试仍然失败的调试记录
+                        retry_result_info = {
+                            'success': False,
+                            'line_count_match': False,
+                            'error_message': f'重试后行数仍不匹配 ({check_retry} vs {check_chunk_string})'
+                        }
+                        add_debug_record(video_id, chunk_info, retry_input_data, retry_output_data, retry_result_info, "retry")
                         raise ValueError(f"编号{first_item_number}重试后行数仍不匹配 ({check_retry} vs {check_chunk_string})")
 
                 except Exception as retry_error:
@@ -774,7 +963,7 @@ def time_to_str(dt):
     return dt.strftime("%H:%M:%S,%f")[:-3]
 
 
-async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt, special_terms="", content_name="", model='deepseek-chat'):
+async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt, special_terms="", content_name="", model='deepseek-chat', video_id="unknown"):
     """
     使用DeepSeek异步并行翻译英文字幕到中文
     """
@@ -801,7 +990,7 @@ async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt
     for i in range(0, len(items), BATCH_SIZE):
         chunk = items[i:i + BATCH_SIZE]
         tasks.append(
-            process_chunk(chunk, custom_prompt, model, client, semaphore)
+            process_chunk(chunk, custom_prompt, model, client, semaphore, "system_prompt_placeholder", video_id)
         )
     
     # 并行执行所有任务
@@ -1454,7 +1643,7 @@ async def split_process_chunk(chunk, model, client, semaphore):
     return result
 
 # 250403更新
-async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_choice="gpt", special_terms="", content_name=""):
+async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_choice="gpt", special_terms="", content_name="", video_id="unknown"):
     """
     统一的字幕翻译函数，支持不同模型选择
     
@@ -1476,7 +1665,8 @@ async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_ch
             model=model,
             api_key=DEEPSEEK_API_KEY,
             special_terms=special_terms, 
-            content_name=content_name
+            content_name=content_name,
+            video_id=video_id
         )
     elif model_choice.lower() == "gpt":
         model = 'gpt-4.1-mini'
@@ -1486,12 +1676,13 @@ async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_ch
             model=model,
             api_key=OPENAI_API_KEY,
             special_terms=special_terms, 
-            content_name=content_name
+            content_name=content_name,
+            video_id=video_id
         )
     else:
         raise ValueError(f"不支持的模型选择: {model_choice}，请选择 'deepseek' 或 'gpt'")
 
-async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, api_key, special_terms="", content_name=""):
+async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, api_key, special_terms="", content_name="", video_id="unknown"):
     """
     统一的模型翻译实现函数
     """
@@ -1532,7 +1723,7 @@ async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, 
     for i in range(0, len(items), BATCH_SIZE):
         chunk = items[i:i + BATCH_SIZE]
         tasks.append(
-            process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt)
+            process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt, video_id)
         )
         logger.debug(f"任务序号: {i}")
     
