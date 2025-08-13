@@ -36,26 +36,30 @@ def add_debug_record(video_id, chunk_info, input_data, output_data, result_info,
     """
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    record = f"""[{timestamp}] VIDEO: {video_id} | CHUNK: {chunk_info['first']}-{chunk_info['end']} | ATTEMPT: {attempt_type}
+    record = {
+        'timestamp': timestamp,
+        'video_id': video_id,
+        'chunk_first': chunk_info['first'],
+        'chunk_end': chunk_info['end'],
+        'attempt_type': attempt_type,
+        'content': f"""[{timestamp}] VIDEO: {video_id} | CHUNK: {chunk_info['first']}-{chunk_info['end']} | ATTEMPT: {attempt_type}
 INPUT_LINES: {chunk_info['expected']}
 {input_data['user_content']}
 ---
-OUTPUT_LINES: {output_data.get('actual_lines', 'ERROR')}
-RAW_RESPONSE: {output_data.get('raw_response', 'ERROR')}
----
-PARSED_OUTPUT:
+OUTPUT_LINES: {output_data.get('actual_lines', 'ERROR')} (Expected: {chunk_info['expected']})
 {output_data.get('formatted_output', 'ERROR')}
 ---
 RESULT: {'SUCCESS' if result_info['success'] else 'FAILED'} ({chunk_info['expected']}→{output_data.get('actual_lines', '?')}) {result_info.get('error_message', '')}
 {'='*80}
 """
+    }
     
     with debug_lock:
         debug_records.append(record)
 
 def get_debug_records_text():
     """
-    获取所有调试记录的文本内容
+    获取所有调试记录的文本内容，按CHUNK编号排序
     
     Returns:
         str: 格式化的调试记录文本
@@ -64,13 +68,21 @@ def get_debug_records_text():
         if not debug_records:
             return "No debug records found.\n"
         
+        # 按CHUNK编号排序：先按chunk_first，再按attempt_type (initial在前，retry在后)
+        sorted_records = sorted(debug_records, key=lambda x: (
+            x['chunk_first'], 
+            0 if x['attempt_type'] == 'initial' else 1,  # initial排在retry前面
+            x['timestamp']
+        ))
+        
         header = f"""=== LLM Translation Debug Records ===
 Generated: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 Total Records: {len(debug_records)}
+Sorted by: CHUNK number, then attempt type (initial → retry)
 {'='*80}
 
 """
-        return header + '\n'.join(debug_records)
+        return header + '\n'.join(record['content'] for record in sorted_records)
 
 def clear_debug_records():
     """清空调试记录"""
