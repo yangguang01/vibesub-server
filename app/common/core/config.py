@@ -27,8 +27,14 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_kEY","")
 PROXY_URL = os.getenv("PROXY_URL", "")
 
-# API超时配置
-API_TIMEOUT = int(os.getenv("API_TIMEOUT", "1200"))  # 默认120秒
+# API超时配置 - 优化后的超时设置
+API_TIMEOUT = int(os.getenv("API_TIMEOUT", "1200"))  # 默认1200秒（向后兼容）
+
+# 🔥 新增分阶段超时配置
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))      # 下载：5分钟
+TRANSCRIPTION_TIMEOUT = int(os.getenv("TRANSCRIPTION_TIMEOUT", "300"))  # 转写：5分钟  
+TRANSLATION_TIMEOUT = int(os.getenv("TRANSLATION_TIMEOUT", "300"))    # 翻译：5分钟
+TOTAL_TASK_TIMEOUT = int(os.getenv("TOTAL_TASK_TIMEOUT", "900"))      # 总超时：15分钟
 
 # 文件保留配置
 SUBTITLES_RETENTION_DAYS = int(os.getenv("SUBTITLES_RETENTION_DAYS", "7"))

@@ -251,6 +251,11 @@ async def get_video_info_and_download_async(url, file_path):
     return video_data
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((yt_dlp.utils.DownloadError, OSError, ConnectionError))
+)
 def get_video_info_and_download(url):
     """
     从 YouTube 下载音频到当前工作目录，文件名为 <video_id>.webm，
@@ -280,29 +285,65 @@ def get_video_info_and_download(url):
             ),
         },
         'force_ipv4': True,
+        # 🔥 添加超时控制
+        'socket_timeout': 60,  # 60秒连接超时
+        'retries': 2,  # yt-dlp内部重试2次
     }
     if PROXY_URL:
         ydl_opts['proxy'] = PROXY_URL
         logger.info(f"使用代理: {PROXY_URL}")
 
     logger.info(f"开始下载视频: {url}")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        # ydl.prepare_filename 会使用 outtmpl 规则，返回实际写入的文件路径
-        filepath = ydl.prepare_filename(info)
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # 🔥 先提取信息，检查视频可用性
+            info = ydl.extract_info(url, download=False)
+            
+            # 检查视频状态
+            if info.get('is_live'):
+                raise ValueError("不支持直播视频")
+            if info.get('availability') in ['private', 'premium_only', 'subscriber_only']:
+                raise ValueError(f"视频不可访问: {info.get('availability')}")
+            
+            # 提取并下载
+            info = ydl.extract_info(url, download=True)
+            # ydl.prepare_filename 会使用 outtmpl 规则，返回实际写入的文件路径
+            filepath = ydl.prepare_filename(info)
 
-    video_id = info.get('id', '')
-    # filepath 可能包含路径，这里只取文件名
-    filename = os.path.basename(filepath)
+        video_id = info.get('id', '')
+        # filepath 可能包含路径，这里只取文件名
+        filename = os.path.basename(filepath)
 
-    video_data = {
-        'title': info.get('title', 'Unknown'),
-        'id': video_id,
-        'channel': info.get('channel', 'Unknown'),
-    }
+        video_data = {
+            'title': info.get('title', 'Unknown'),
+            'id': video_id,
+            'channel': info.get('channel', 'Unknown'),
+        }
 
-    logger.info(f"视频下载完成: {filename}")
-    return video_data, filename
+        logger.info(f"视频下载完成: {filename}")
+        return video_data, filename
+        
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        logger.error(f"yt-dlp下载错误: {error_msg}")
+        
+        # 🔥 分类处理不同类型的下载错误
+        if any(keyword in error_msg.lower() for keyword in [
+            "bytes missing", "eoferror", "connection reset", "timeout",
+            "http error 5", "temporary failure"
+        ]):
+            # 这些是临时性网络错误，可以重试
+            logger.warning(f"检测到临时性网络错误，将重试: {error_msg}")
+            raise  # 让tenacity重试
+        else:
+            # 永久性错误，不重试
+            logger.error(f"检测到永久性错误，不重试: {error_msg}")
+            raise ValueError(f"视频下载失败: {error_msg}")
+            
+    except Exception as e:
+        logger.error(f"视频下载异常: {str(e)}")
+        raise
 
 
 def transcribe_audio_with_assemblyai(filename: str) -> list:
@@ -463,7 +504,7 @@ def extract_asr_sentences(srt_content):
 
 # 通用的异步重试装饰器
 def async_retry(max_attempts=None, exceptions=None):
-    """异步函数的重试装饰器"""
+    """智能异步函数重试装饰器"""
     if max_attempts is None:
         max_attempts = RETRY_ATTEMPTS
     if exceptions is None:
@@ -478,10 +519,36 @@ def async_retry(max_attempts=None, exceptions=None):
                     return await func(*args, **kwargs)
                 except exceptions as e:
                     last_exception = e
-                    # 指数退避策略
-                    wait_time = min(1 * (2 ** attempt), 8)
-                    logger.warning(f"尝试 {attempt+1}/{max_attempts} 失败: {str(e)}，等待 {wait_time}秒后重试")
-                    await asyncio.sleep(wait_time)
+                    error_msg = str(e).lower()
+                    
+                    # 🔥 智能错误分类：某些错误不值得重试
+                    non_retryable_errors = [
+                        "invalid api key", "authentication failed", "permission denied",
+                        "model not found", "invalid request", "quota exceeded",
+                        "content policy violation", "invalid json", "malformed request"
+                    ]
+                    
+                    if any(err in error_msg for err in non_retryable_errors):
+                        logger.error(f"检测到不可重试错误: {str(e)}")
+                        raise e
+                    
+                    # 🔥 动态调整等待时间
+                    if "rate limit" in error_msg or "too many requests" in error_msg:
+                        # 限流错误：更长等待时间
+                        wait_time = min(5 * (2 ** attempt), 60)
+                    elif "timeout" in error_msg or "connection" in error_msg:
+                        # 网络错误：标准等待时间
+                        wait_time = min(2 * (2 ** attempt), 16)
+                    else:
+                        # 其他错误：快速重试
+                        wait_time = min(1 * (2 ** attempt), 8)
+                    
+                    if attempt < max_attempts - 1:  # 不是最后一次尝试
+                        logger.warning(f"尝试 {attempt+1}/{max_attempts} 失败: {str(e)}，等待 {wait_time}秒后重试")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"所有重试已用尽，最终失败: {str(e)}")
+                        
             # 所有重试都失败了
             raise last_exception or Exception("最大重试次数已用尽")
         return wrapper

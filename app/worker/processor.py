@@ -61,114 +61,118 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
         logger.info(f"开始处理视频任务 {video_id}，调试记录已初始化")
 
         # 优先使用yt 自动生成的英文字幕
-        yt_sub_path, video_title, channel_name = download_auto_subtitle(youtube_url)
-        if yt_sub_path:
-            try:
-                srt_text = process_ytsub(yt_sub_path)
-                # 进度0.3：生成翻译策略
-                logger.info("开始生成翻译策略...")
-                llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
-                video_context_data = await llm_context_task
-                video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
-                await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
-            except Exception as e:
-                logger.error(f"Error: {e}")
-                # 执行原始流程
+        try:
+            yt_sub_path, video_title, channel_name = download_auto_subtitle(youtube_url)
+            if yt_sub_path:
+                try:
+                    srt_text = process_ytsub(yt_sub_path)
+                    # 进度0.3：生成翻译策略
+                    logger.info("开始生成翻译策略...")
+                    llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
+                    video_context_data = await llm_context_task
+                    video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
+                    await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
+                except Exception as e:
+                    logger.error(f"处理YouTube字幕失败: {e}")
+                    # 回退到音频下载流程
+                    yt_sub_path = None
+            
+            if not yt_sub_path:
+                # 执行音频下载流程
                 logger.info("开始下载音频...")
-                video_info, filename = await loop.run_in_executor(executor, get_video_info_and_download, youtube_url)
-                await loop.run_in_executor(executor, update_video_task, video_id, "processing", 0.2)
+                try:
+                    video_info, filename = await loop.run_in_executor(executor, get_video_info_and_download, youtube_url)
+                    await loop.run_in_executor(executor, update_video_task, video_id, "processing", 0.2)
+                except Exception as e:
+                    logger.error(f"音频下载失败: {e}")
+                    await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.1, [], f"音频下载失败: {str(e)}")
+                    raise
 
                 # 进度0.4：生成翻译策略
                 logger.info("开始生成翻译策略...")
-                video_title = video_info.get('title', '')
-                channel_name = video_info.get('channel', '')
-                llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
-                video_context_data = await llm_context_task
-                video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
-                await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
+                try:
+                    video_title = video_info.get('title', '')
+                    channel_name = video_info.get('channel', '')
+                    llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
+                    video_context_data = await llm_context_task
+                    video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
+                    await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
+                except Exception as e:
+                    logger.error(f"生成翻译策略失败: {e}")
+                    await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.2, [], f"生成翻译策略失败: {str(e)}")
+                    raise
 
                 # 进度0.6：进行ASR处理
                 logger.info("开始ASR处理...")
-                asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
-                srt_text = convert_AssemblyAI_to_srt(asr_result)
-                # 异步上传英文字幕到Firebase Storage
-                def upload_srt_to_storage():
-                    english_srt_blob = bucket.blob(f"asr_srt/{video_id}.srt")
-                    english_srt_blob.upload_from_string(
-                        srt_text,
-                        content_type="text/plain"
-                    )
-                    return english_srt_blob.public_url  # 返回上传后的URL
-                # 放入线程池执行
-                upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
-                await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
-        else:
-            # 进度0.3：开始下载音频
-            logger.info("开始下载音频...")
-            video_info, filename = await loop.run_in_executor(executor, get_video_info_and_download, youtube_url)
-            await loop.run_in_executor(executor, update_video_task, video_id, "processing", 0.2)
-
-            # 进度0.4：生成翻译策略
-            logger.info("开始生成翻译策略...")
-            video_title = video_info.get('title', '')
-            channel_name = video_info.get('channel', '')
-            llm_context_task = asyncio.create_task(get_video_context_from_llm(video_title, channel_name))
-            video_context_data = await llm_context_task
-            video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
-            await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
-
-            # 进度0.6：进行ASR处理
-            logger.info("开始ASR处理...")
-            asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
-            srt_text = convert_AssemblyAI_to_srt(asr_result)
-            # 异步上传英文字幕到Firebase Storage
-            def upload_srt_to_storage():
-                english_srt_blob = bucket.blob(f"asr_srt/{video_id}.srt")
-                english_srt_blob.upload_from_string(
-                    srt_text,
-                    content_type="text/plain"
-                )
-                return english_srt_blob.public_url  # 返回上传后的URL
-            # 放入线程池执行
-            upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
-            await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
+                try:
+                    asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
+                    srt_text = convert_AssemblyAI_to_srt(asr_result)
+                    # 异步上传英文字幕到Firebase Storage
+                    def upload_srt_to_storage():
+                        english_srt_blob = bucket.blob(f"asr_srt/{video_id}.srt")
+                        english_srt_blob.upload_from_string(
+                            srt_text,
+                            content_type="text/plain"
+                        )
+                        return english_srt_blob.public_url  # 返回上传后的URL
+                    # 放入线程池执行
+                    upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
+                    await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
+                except Exception as e:
+                    logger.error(f"ASR处理失败: {e}")
+                    await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.3, trans_strategies, f"ASR处理失败: {str(e)}")
+                    raise
+        except Exception as e:
+            logger.error(f"字幕获取阶段失败: {e}")
+            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.1, [], f"字幕获取失败: {str(e)}")
+            raise
 
         # 进度0.8：开始翻译
-        #将短句子合并为长句子
-        numbered_sentences_chunks = extract_asr_sentences(srt_text)
-        logger.info("开始翻译字幕...")
-        #翻译字幕
-        llm_trans_result = await translate_subtitles(
-            numbered_sentences_chunks,
-            video_context_prompt,
-            model,
-            special_terms,
-            content_name,
-            video_id
-        )
-        await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.85)
+        try:
+            #将短句子合并为长句子
+            numbered_sentences_chunks = extract_asr_sentences(srt_text)
+            logger.info("开始翻译字幕...")
+            #翻译字幕
+            llm_trans_result = await translate_subtitles(
+                numbered_sentences_chunks,
+                video_context_prompt,
+                model,
+                special_terms,
+                content_name,
+                video_id
+            )
+            await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.85)
+        except Exception as e:
+            logger.error(f"翻译处理失败: {e}")
+            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.6, trans_strategies, f"翻译处理失败: {str(e)}")
+            raise
 
         # 进度0.9：优化字幕长度
-        # 生成原始字幕的字典数据，给长句子匹配时间轴信息
-        subtitles_dict = subtitles_to_dict(srt_text)
-        marged_timeranges_dict = map_marged_sentence_to_timeranges(numbered_sentences_chunks, subtitles_dict)
-        # 给中文翻译匹配时间轴信息
-        chinese_timeranges_dict = map_chinese_to_time_ranges_v2(llm_trans_result, marged_timeranges_dict)
-        # 使用中文长句子分割为适合字幕显示的短句
-        logger.info("开始处理中文长句子拆分...")
-        short_chinese_subtitles_dict = await split_long_chinese_sentence_v4(chinese_timeranges_dict)
-        # 将字典转为SRT字符串
-        cn_srt_content = format_subtitles_v2(short_chinese_subtitles_dict)
-        # 异步保存中文字幕到Firebase Storage
-        def upload_chinese_srt_to_storage():
-            chinese_srt_blob = bucket.blob(f"cn_srt/{video_id}.srt")
-            chinese_srt_blob.upload_from_string(
-                cn_srt_content,
-                content_type="text/plain"
-            )
-            return chinese_srt_blob.public_url  # 可选：返回上传后的URL
-        # 放入线程池执行
-        chinese_srt_url = await loop.run_in_executor(executor, upload_chinese_srt_to_storage)
+        try:
+            # 生成原始字幕的字典数据，给长句子匹配时间轴信息
+            subtitles_dict = subtitles_to_dict(srt_text)
+            marged_timeranges_dict = map_marged_sentence_to_timeranges(numbered_sentences_chunks, subtitles_dict)
+            # 给中文翻译匹配时间轴信息
+            chinese_timeranges_dict = map_chinese_to_time_ranges_v2(llm_trans_result, marged_timeranges_dict)
+            # 使用中文长句子分割为适合字幕显示的短句
+            logger.info("开始处理中文长句子拆分...")
+            short_chinese_subtitles_dict = await split_long_chinese_sentence_v4(chinese_timeranges_dict)
+            # 将字典转为SRT字符串
+            cn_srt_content = format_subtitles_v2(short_chinese_subtitles_dict)
+            # 异步保存中文字幕到Firebase Storage
+            def upload_chinese_srt_to_storage():
+                chinese_srt_blob = bucket.blob(f"cn_srt/{video_id}.srt")
+                chinese_srt_blob.upload_from_string(
+                    cn_srt_content,
+                    content_type="text/plain"
+                )
+                return chinese_srt_blob.public_url  # 可选：返回上传后的URL
+            # 放入线程池执行
+            chinese_srt_url = await loop.run_in_executor(executor, upload_chinese_srt_to_storage)
+        except Exception as e:
+            logger.error(f"字幕后处理失败: {e}")
+            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.85, trans_strategies, f"字幕后处理失败: {str(e)}")
+            raise
         
         # 保存调试记录到 Firebase Storage
         debug_url = await save_debug_records_to_storage(video_id, bucket)
