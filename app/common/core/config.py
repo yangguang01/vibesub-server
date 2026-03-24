@@ -1,56 +1,66 @@
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
-# 加载环境变量
+from app.common.core.external_services import ExternalServiceRegistry
+
 load_dotenv()
 
-# 基础路径
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+REPO_DIR = Path(__file__).resolve().parents[3]
+APP_DIR = Path(__file__).resolve().parents[2]
 
-# 目录配置
-LOGS_DIR = BASE_DIR / "logs"
-STATIC_DIR = BASE_DIR / "static"
+EXTERNAL_SERVICES_PATH = REPO_DIR / "config" / "external_services.toml"
+external_services = ExternalServiceRegistry(EXTERNAL_SERVICES_PATH)
+
+LOGS_DIR = APP_DIR / "logs"
+STATIC_DIR = APP_DIR / "static"
 SUBTITLES_DIR = STATIC_DIR / "subtitles"
 TRANSCRIPTS_DIR = STATIC_DIR / "transcripts"
-TMP_DIR = BASE_DIR / "tmp"
+TMP_DIR = APP_DIR / "tmp"
 AUDIO_DIR = TMP_DIR / "audio"
 
-# API配置
+APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
 API_PREFIX = "/api"
-DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1")
+INTERNAL_API_PREFIX = "/internal"
+DEBUG = os.getenv("DEBUG", "false").lower() in {"true", "1", "yes"}
 
-# 第三方API配置
-REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_kEY","")
-PROXY_URL = os.getenv("PROXY_URL", "")
+API_TIMEOUT = int(os.getenv("API_TIMEOUT", "1200"))
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))
+TRANSCRIPTION_TIMEOUT = int(os.getenv("TRANSCRIPTION_TIMEOUT", "300"))
+TRANSLATION_TIMEOUT = int(os.getenv("TRANSLATION_TIMEOUT", "300"))
+TOTAL_TASK_TIMEOUT = int(os.getenv("TOTAL_TASK_TIMEOUT", "900"))
 
-# API超时配置 - 优化后的超时设置
-API_TIMEOUT = int(os.getenv("API_TIMEOUT", "1200"))  # 默认1200秒（向后兼容）
-
-# 🔥 新增分阶段超时配置
-DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))      # 下载：5分钟
-TRANSCRIPTION_TIMEOUT = int(os.getenv("TRANSCRIPTION_TIMEOUT", "300"))  # 转写：5分钟  
-TRANSLATION_TIMEOUT = int(os.getenv("TRANSLATION_TIMEOUT", "300"))    # 翻译：5分钟
-TOTAL_TASK_TIMEOUT = int(os.getenv("TOTAL_TASK_TIMEOUT", "900"))      # 总超时：15分钟
-
-# 文件保留配置
 SUBTITLES_RETENTION_DAYS = int(os.getenv("SUBTITLES_RETENTION_DAYS", "7"))
 TRANSCRIPTS_RETENTION_DAYS = int(os.getenv("TRANSCRIPTS_RETENTION_DAYS", "7"))
 
-# 功能配置
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))
 RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "2"))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50")) 
-
-# 用量限制
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "5"))
 
-# pubsub配置
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-SERVICE_URL = os.getenv("SERVICE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 
-#Firebase
-GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
+STORAGE_BUCKET = os.getenv(
+    "STORAGE_BUCKET",
+    external_services.get_task_config("subtitle_storage").get("bucket", ""),
+)
+API_SERVICE_URL = os.getenv("API_SERVICE_URL", "")
+WORKER_SERVICE_URL = os.getenv("WORKER_SERVICE_URL", "")
+PROXY_URL = os.getenv("PROXY_URL", "")
+
+CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL = os.getenv("CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL", "")
+WORKER_SERVICE_AUDIENCE = os.getenv("WORKER_SERVICE_AUDIENCE", WORKER_SERVICE_URL)
+INTERNAL_AUTH_ENABLED = os.getenv("INTERNAL_AUTH_ENABLED", "true").lower() in {"true", "1", "yes"}
+
+
+def get_task_config(task_name: str, provider_override: str | None = None):
+    return external_services.get_task_config(task_name, provider_override=provider_override)
+
+
+def get_provider_config(provider_name: str):
+    return external_services.get_provider(provider_name)

@@ -1,8 +1,9 @@
-import os
-from google.cloud import firestore
-from dotenv import load_dotenv
+from app.common.services.infrastructure import get_firestore_client
 
-load_dotenv()
 
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-db = firestore.Client(project=PROJECT_ID)
+class LazyFirestoreClient:
+    def __getattr__(self, item):
+        return getattr(get_firestore_client(), item)
+
+
+db = LazyFirestoreClient()

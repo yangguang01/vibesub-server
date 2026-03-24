@@ -1,0 +1,119 @@
+[providers.openai]
+kind = "llm"
+api_key_env = "OPENAI_API_KEY"
+base_url = ""
+timeout = 1200
+
+[providers.deepseek]
+kind = "llm"
+api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com"
+timeout = 1200
+
+[providers.assemblyai]
+kind = "asr"
+api_key_env = "ASSEMBLYAI_API_KEY"
+timeout = 1200
+
+[providers.firebase_admin]
+kind = "firebase_admin"
+credentials_env = "GOOGLE_APPLICATION_CREDENTIALS"
+
+[providers.firestore_main]
+kind = "firestore"
+project_env = "GOOGLE_CLOUD_PROJECT"
+
+[providers.storage_main]
+kind = "storage"
+project_env = "GOOGLE_CLOUD_PROJECT"
+bucket_env = "STORAGE_BUCKET"
+bucket = "tube-trans.firebasestorage.app"
+
+[providers.cloud_tasks_main]
+kind = "queue"
+project_env = "GOOGLE_CLOUD_PROJECT"
+location = "us-west1"
+queue = "vibesub-queue"
+target_url_env = "WORKER_SERVICE_URL"
+auth_mode = "oidc"
+
+[providers.youtube_default]
+kind = "youtube"
+proxy_env = "PROXY_URL"
+force_ipv4 = true
+socket_timeout = 60
+retries = 2
+
+[tasks.translation_main]
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0.3
+top_p = 0.7
+json_output = true
+
+[tasks.translation_main_strict]
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0
+top_p = 1
+json_output = true
+
+[tasks.translation_fallback_strong]
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0
+top_p = 1
+json_output = true
+
+[tasks.translation_context]
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 1
+top_p = 0.7
+json_output = true
+
+[tasks.alignment_validator]
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0
+top_p = 1
+json_output = true
+mode = "enforce"
+max_validator_retries = 2
+max_content_retries = 3
+fallback_chunk_size = 12
+
+[tasks.sentence_splitter]
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0
+top_p = 1
+json_output = true
+
+[tasks.transcription_main]
+provider = "assemblyai"
+
+[tasks.subtitle_storage]
+provider = "storage_main"
+path_prefix = "cn_srt"
+
+[tasks.asr_storage]
+provider = "storage_main"
+path_prefix = "asr_srt"
+
+[tasks.debug_storage]
+provider = "storage_main"
+path_prefix = "debug_records"
+
+[tasks.translation_dispatch]
+provider = "cloud_tasks_main"
+path = "/internal/cloud-tasks/process-translation"
+
+[tasks.youtube_probe]
+provider = "youtube_default"
+
+[tasks.youtube_audio_download]
+provider = "youtube_default"
+
+[tasks.youtube_auto_subtitle_download]
+provider = "youtube_default"

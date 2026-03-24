@@ -1,8 +1,9 @@
-import os
-from google.cloud import firestore
+from app.common.services.infrastructure import get_firestore_client
 
-# 从环境变量读取项目 ID
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 
-# 初始化 Firestore 客户端
-db = firestore.Client(project=PROJECT_ID) 
+class LazyFirestoreClient:
+    def __getattr__(self, item):
+        return getattr(get_firestore_client(), item)
+
+
+db = LazyFirestoreClient()
