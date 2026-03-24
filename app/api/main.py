@@ -1,19 +1,16 @@
 import os
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 import uvicorn
 
 
 from app.api.router import api_router
-from app.common.core.config import API_PREFIX
+from app.common.core.config import API_PREFIX, APP_VERSION
 from app.common.core.logging import logger
 from app.common.utils.file_utils import create_directories
-from app.common.utils.cleanup import setup_cleanup_task
 from app.common.utils.firebase_init import init_firebase
-from app.common.utils.firebase_storage_init import *
 from app.common.utils.youtube import log_yt_dlp_version
 
 from dotenv import load_dotenv
@@ -29,7 +26,7 @@ log_yt_dlp_version()
 app = FastAPI(
     title="YouTube字幕翻译API",
     description="将YouTube视频字幕翻译为中文的API服务",
-    version=" 1.0"
+    version=APP_VERSION
 )
 
 
@@ -75,6 +72,7 @@ app.include_router(api_router, prefix=API_PREFIX)
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行的操作"""
+    create_directories()
     logger.info("应用启动成功")
 
 

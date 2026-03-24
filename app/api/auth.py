@@ -39,8 +39,8 @@ async def session_login(data: SessionLoginRequest, response: Response):
         )
         uid = decoded["uid"]
         email = decoded.get("email", "")
-        logger.info(f"uid: {uid}, email: {email}")
-    except auth.InvalidIdTokenErro:
+        logger.info(f"用户登录成功 uid={uid}, email={email}")
+    except auth.InvalidIdTokenError:
         raise HTTPException(status_code=401, detail="无效的 ID Token")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"验证 ID Token 失败: {e}")
@@ -62,7 +62,7 @@ async def session_login(data: SessionLoginRequest, response: Response):
         samesite="none",
         max_age=int(expires_in.total_seconds())
     )
-    logger.info(f"设置会话 Cookie 成功: {session_cookie}")
+    logger.info("设置会话 Cookie 成功")
     return {"status": "success"}
 
 @router.post("/sessionLogout")

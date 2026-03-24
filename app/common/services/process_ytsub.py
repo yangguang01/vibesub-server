@@ -18,13 +18,13 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from openai import OpenAI
 
 from app.common.core.logging import logger
+from app.common.services.llm_runtime import get_sync_llm_task_runtime
 
 
 # ──────────────────────────────── 默认配置 ─────────────────────────────── #
-DEFAULT_LLM_MODEL    = "gpt-4.1"                                      # 可换更大模型
+DEFAULT_LLM_TASK     = "sentence_splitter"
 DEFAULT_MAX_WORDS    = 100     # 单句超过多少词视为"长句"
 DEFAULT_CHUNK_SIZE   = 10     # 每次发送给 LLM 的长句条数
 DEFAULT_MIN_DURATION = 100    # 每条短句最少时长（ms）
@@ -197,9 +197,9 @@ def chunks(lst: List, size: int):
         yield lst[i:i+size]
 
 
-def call_llm_batch(batch_sent: List[Sentence], llm_model: str = DEFAULT_LLM_MODEL, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Dict[str, List[str]]:
+def call_llm_batch(batch_sent: List[Sentence], llm_model: str | None = None, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Dict[str, List[str]]:
     """
-    使用 client.responses.create 调 LLM。
+    调用配置化的 LLM 客户端处理长句分割。
     每批 <= CHUNK_SIZE 条长句。
     返回 { original_text: [短句1, 短句2, ...] }
     """
@@ -207,28 +207,23 @@ def call_llm_batch(batch_sent: List[Sentence], llm_model: str = DEFAULT_LLM_MODE
     sentence_texts = [s.as_text() for s in batch_sent]
     user_payload = json.dumps({"sentences": sentence_texts}, ensure_ascii=False)
 
-    # 2) 构造 input 消息列表 —— 仅需 system + user 两条
-    inputs = [
-        {
-            "role": "system",
-            "content": [{"type": "input_text", "text": SYSTEM_PROMPT}],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "input_text", "text": user_payload}],
-        },
-    ]
+    runtime = get_sync_llm_task_runtime(DEFAULT_LLM_TASK)
+    client = runtime["client"]
+    model = llm_model or runtime["model"]
+    temperature = runtime.get("temperature", 0)
+    top_p = runtime.get("top_p", 1)
 
-    # 3) 调用 responses.create
-    client = OpenAI()
-
-    raw_json = client.responses.create(
-        model=llm_model,                 # 如 "gpt-4o-mini" / "gpt-4.1"
-        input=inputs,
-        text={"format": {"type": "json_object"}},  # 强制 JSON
-        temperature=0,
-        max_output_tokens=20000,          # 依需要调整
-    ).output_text
+    raw_json = client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_payload},
+        ],
+        temperature=temperature,
+        top_p=top_p,
+        max_tokens=8000,
+    ).choices[0].message.content
 
     data = json.loads(raw_json)
     
@@ -320,7 +315,7 @@ def ms_to_srt(ms: int) -> str:
 def process_ytsub(
     input_file: str | Path,
     output_file: Optional[str | Path] = None,
-    llm_model: str = DEFAULT_LLM_MODEL,
+    llm_model: Optional[str] = None,
     max_words: int = DEFAULT_MAX_WORDS,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     min_duration: int = DEFAULT_MIN_DURATION

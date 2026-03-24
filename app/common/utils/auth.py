@@ -1,20 +1,10 @@
 import os
 from fastapi import Request, HTTPException, Depends
-from firebase_admin import auth, credentials, initialize_app
-from firebase_admin.auth import InvalidSessionCookieError
+from firebase_admin import auth
 from app.common.core.logging import logger
 
 
 def verify_firebase_session(request: Request):
-    # ENV = os.getenv("ENV", "development")
-
-    # if ENV != "production":
-    #     return {
-    #         "uid": "test_user",
-    #         "email": "test@example.com",
-    #         "dev": True
-    #     }
-
     session_cookie = request.cookies.get("session")
     if not session_cookie:
         raise HTTPException(status_code=401, detail="未登录或 Session 缺失")
