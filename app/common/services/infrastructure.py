@@ -17,14 +17,28 @@ def get_firebase_app():
     try:
         return get_app()
     except ValueError:
-        if not GOOGLE_APPLICATION_CREDENTIALS or not Path(GOOGLE_APPLICATION_CREDENTIALS).exists():
-            logger.warning("Firebase 凭证文件不存在，当前跳过 Firebase 初始化")
-            return None
-        cred = credentials.Certificate(GOOGLE_APPLICATION_CREDENTIALS)
         options = {"storageBucket": STORAGE_BUCKET} if STORAGE_BUCKET else None
-        if options:
-            return initialize_app(cred, options)
-        return initialize_app(cred)
+        credential_path = GOOGLE_APPLICATION_CREDENTIALS.strip()
+
+        try:
+            if credential_path:
+                credential_file = Path(credential_path)
+                if credential_file.exists():
+                    logger.info(f"使用服务账号文件初始化 Firebase: {credential_file}")
+                    cred = credentials.Certificate(credential_file)
+                    if options:
+                        return initialize_app(cred, options)
+                    return initialize_app(cred)
+                logger.warning(f"Firebase 凭证文件不存在，改用默认凭证初始化: {credential_file}")
+            else:
+                logger.info("未提供 Firebase 凭证文件，尝试使用默认凭证初始化")
+
+            if options:
+                return initialize_app(options=options)
+            return initialize_app()
+        except Exception as exc:
+            logger.error(f"Firebase 初始化失败: {exc}", exc_info=True)
+            return None
 
 
 @lru_cache

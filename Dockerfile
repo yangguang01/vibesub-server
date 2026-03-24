@@ -14,8 +14,9 @@ RUN pip install --upgrade pip && \
     # 安装并升级到最新 yt-dlp
     pip install --no-cache-dir --upgrade yt-dlp
 
-# 复制整个 app 目录（包含 app/api/main.py 及其他模块）
+# 复制运行时需要的代码和配置
 COPY app/ ./app/
+COPY config/ ./config/
 
 
 # 设置环境变量
