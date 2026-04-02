@@ -3,12 +3,25 @@ kind = "llm"
 api_key_env = "OPENAI_API_KEY"
 base_url = ""
 timeout = 1200
+temperature = 0.3
+top_p = 0.7
 
 [providers.deepseek]
 kind = "llm"
 api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
 timeout = 1200
+temperature = 0.3
+top_p = 0.7
+
+[providers.kimi]
+kind = "llm"
+api_key_env = "MOONSHOT_API_KEY"
+base_url_env = "MOONSHOT_BASE_URL"
+base_url = "https://api.moonshot.ai/v1"
+timeout = 1200
+temperature = 1.0
+top_p = 0.95
 
 [providers.assemblyai]
 kind = "asr"
@@ -44,51 +57,42 @@ force_ipv4 = true
 socket_timeout = 60
 retries = 2
 
-[tasks.translation_main]
-provider = "deepseek"
-model = "deepseek-chat"
-temperature = 0.3
-top_p = 0.7
-json_output = true
+[llm.translation]
+provider = "kimi"
+model = "kimi-k2.5"
+temperature_main = 1.0
+top_p_main = 0.95
+temperature_strict = 1.0
+top_p_strict = 0.95
+temperature_fallback = 1.0
+top_p_fallback = 0.95
 
-[tasks.translation_main_strict]
-provider = "deepseek"
-model = "deepseek-chat"
-temperature = 0
-top_p = 1
-json_output = true
+[llm.context]
+provider = "kimi"
+model = "kimi-k2.5"
+temperature = 1.0
+top_p = 0.95
 
-[tasks.translation_fallback_strong]
-provider = "deepseek"
-model = "deepseek-chat"
-temperature = 0
-top_p = 1
-json_output = true
-
-[tasks.translation_context]
-provider = "deepseek"
-model = "deepseek-chat"
-temperature = 1
-top_p = 0.7
-json_output = true
-
-[tasks.alignment_validator]
-provider = "deepseek"
-model = "deepseek-chat"
-temperature = 0
-top_p = 1
-json_output = true
+[llm.alignment]
+provider = "kimi"
+model = "kimi-k2.5"
+temperature = 1.0
+top_p = 0.95
 mode = "enforce"
 max_validator_retries = 2
 max_content_retries = 3
 fallback_chunk_size = 12
 
-[tasks.sentence_splitter]
-provider = "deepseek"
-model = "deepseek-chat"
-temperature = 0
-top_p = 1
-json_output = true
+[llm.sentence_splitter]
+provider = "kimi"
+model = "kimi-k2.5"
+temperature = 1.0
+top_p = 0.95
+
+[runtime]
+max_concurrent_tasks = 5
+retry_attempts = 2
+batch_size = 50
 
 [tasks.transcription_main]
 provider = "assemblyai"

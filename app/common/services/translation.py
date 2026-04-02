@@ -36,7 +36,6 @@ from app.common.services.llm_runtime import (
     NonRetryableLLMError,
     RetryableLLMError,
     get_llm_task_runtime,
-    resolve_provider_override,
     safe_json_chat_completion,
 )
 
@@ -2209,11 +2208,11 @@ async def _translate_chunk_with_validation(chunk, custom_prompt, provider_overri
 
 
 async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_choice="gpt", special_terms="", content_name="", video_id="unknown"):
-    provider_override = resolve_provider_override(model_choice)
+    _ = model_choice
     return await translate_with_model(
         numbered_sentences_chunks,
         custom_prompt,
-        provider_override=provider_override,
+        provider_override=None,
         special_terms=special_terms,
         content_name=content_name,
         video_id=video_id,

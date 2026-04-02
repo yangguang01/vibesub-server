@@ -135,7 +135,7 @@ async def process_translation_task(
     content_name,
     special_terms="",
     language="zh-CN",
-    model="gpt",
+    model="",
 ):
     loop = asyncio.get_event_loop()
     bucket = get_storage_bucket()
@@ -279,7 +279,7 @@ async def create_translation_task(
     content_name,
     special_terms="",
     language="zh-CN",
-    model="gpt",
+    model="",
 ):
     await process_translation_task(
         task_id=task_id,

@@ -50,7 +50,37 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-编辑`.env`文件，设置您的API密钥和其他配置。
+编辑`.env`文件，至少设置以下密钥：
+
+- `OPENAI_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `MOONSHOT_API_KEY`
+- `ASSEMBLYAI_API_KEY`
+
+LLM 的默认厂商、模型、温度等参数统一写在 `config/external_services.toml` 中。
+通常只需要改配置文件即可，不需要额外传一堆环境变量。
+
+`MAX_CONCURRENT_TASKS`、`RETRY_ATTEMPTS`、`BATCH_SIZE` 这类运行参数现在也有配置文件默认值，
+只有在需要临时覆盖时，才需要在环境变量里设置。
+
+如果只是临时覆盖某个子任务的配置，再使用环境变量即可，例如：
+
+```bash
+MOONSHOT_BASE_URL=https://api.moonshot.cn/v1
+LLM_CONTEXT_PROVIDER=kimi
+LLM_CONTEXT_MODEL=kimi-k2.5
+LLM_ALIGNMENT_FALLBACK_CHUNK_SIZE=8
+```
+
+当前支持按子任务分别配置：
+
+- `translation`
+- `context`
+- `alignment`
+- `sentence_splitter`
+
+如果需要查看“如何通过 Cloud Run 环境变量覆盖 `external_services.toml` 默认值”，见：
+[docs/env_override_guide_2026-04-02.md](/Users/yanggaung/Desktop/vibesub/tube-trans-server-byFastAPI-v3/docs/env_override_guide_2026-04-02.md)
 
 ## 启动服务
 
@@ -105,3 +135,10 @@ curl "http://localhost:8000/api/subtitles/{task_id}" -o subtitle.srt
 ### 04/20 2.5版本更新
 
 1.使用新的ASR服务 
+
+### 04/02 3.x 配置化 LLM 更新
+
+1.新增 Moonshot Kimi 2.5 官方 API 接入
+2.LLM 选择改为配置文件默认生效
+3.支持通过环境变量按需覆盖 `translation / context / alignment / sentence_splitter`
+4.不再通过请求里的 `model` 字段决定实际运行模型

@@ -1,6 +1,5 @@
 # 环境变量文件
 .env
-.env.example
 tube-trans-firebase-adminsdk-fbsvc-f1a07a8cf3.json
 
 # Python缓存文件

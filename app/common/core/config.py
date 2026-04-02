@@ -34,13 +34,14 @@ TOTAL_TASK_TIMEOUT = int(os.getenv("TOTAL_TASK_TIMEOUT", "900"))
 SUBTITLES_RETENTION_DAYS = int(os.getenv("SUBTITLES_RETENTION_DAYS", "7"))
 TRANSCRIPTS_RETENTION_DAYS = int(os.getenv("TRANSCRIPTS_RETENTION_DAYS", "7"))
 
-MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))
-RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "2"))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))
+MAX_CONCURRENT_TASKS = int(external_services.get_runtime_value("max_concurrent_tasks", env_name="MAX_CONCURRENT_TASKS", default=5))
+RETRY_ATTEMPTS = int(external_services.get_runtime_value("retry_attempts", env_name="RETRY_ATTEMPTS", default=2))
+BATCH_SIZE = int(external_services.get_runtime_value("batch_size", env_name="BATCH_SIZE", default=50))
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "5"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+MOONSHOT_API_KEY = os.getenv("MOONSHOT_API_KEY", "")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
@@ -60,6 +61,10 @@ INTERNAL_AUTH_ENABLED = os.getenv("INTERNAL_AUTH_ENABLED", "true").lower() in {"
 
 def get_task_config(task_name: str, provider_override: str | None = None):
     return external_services.get_task_config(task_name, provider_override=provider_override)
+
+
+def get_llm_task_config(task_name: str):
+    return external_services.get_llm_task_config(task_name)
 
 
 def get_provider_config(provider_name: str):

@@ -61,7 +61,7 @@ async def translate_video(request: TranslationRequest, user_id: str = Depends(ge
         video_id=video_id,
         youtube_url=youtube_url,
         content_name=request.content_name or "",
-        model=request.model or "gpt",
+        model=request.model or "",
         special_terms=request.special_terms or "",
     )
 
@@ -76,7 +76,7 @@ async def translate_video(request: TranslationRequest, user_id: str = Depends(ge
         "video_id": video_id,
         "content_name": request.content_name or "",
         "special_terms": request.special_terms or "",
-        "model": request.model or "gpt",
+        "model": request.model or "",
     }
 
     try:

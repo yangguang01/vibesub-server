@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 import openai
 from openai import AsyncOpenAI, OpenAI
 
-from app.common.core.config import RETRY_ATTEMPTS, get_task_config
+from app.common.core.config import RETRY_ATTEMPTS, get_llm_task_config
 from app.common.core.logging import logger
 
 
@@ -18,18 +18,13 @@ class NonRetryableLLMError(Exception):
 
 
 def resolve_provider_override(model_choice: str | None) -> Optional[str]:
-    if not model_choice:
-        return None
-    alias = model_choice.lower().strip()
-    if alias == "deepseek":
-        return "deepseek"
-    if alias == "gpt":
-        return "openai"
+    # 请求里的 model 字段仅保留兼容性，不再参与运行时路由。
     return None
 
 
 def get_llm_task_runtime(task_name: str, provider_override: str | None = None) -> Dict[str, Any]:
-    config = get_task_config(task_name, provider_override=provider_override)
+    _ = provider_override
+    config = get_llm_task_config(task_name)
     if not config.get("api_key"):
         raise NonRetryableLLMError(f"任务 {task_name} 缺少 API Key")
     base_url = config.get("base_url") or None
@@ -42,7 +37,8 @@ def get_llm_task_runtime(task_name: str, provider_override: str | None = None) -
 
 
 def get_sync_llm_task_runtime(task_name: str, provider_override: str | None = None) -> Dict[str, Any]:
-    config = get_task_config(task_name, provider_override=provider_override)
+    _ = provider_override
+    config = get_llm_task_config(task_name)
     if not config.get("api_key"):
         raise NonRetryableLLMError(f"任务 {task_name} 缺少 API Key")
     base_url = config.get("base_url") or None
@@ -73,7 +69,7 @@ async def safe_json_chat_completion(
         try:
             response = await client.chat.completions.create(
                 model=runtime["model"],
-                response_format={"type": "json_object"} if runtime.get("json_output", True) else None,
+                response_format={"type": "json_object"},
                 messages=messages,
                 temperature=runtime.get("temperature", 0.3) if temperature is None else temperature,
                 top_p=runtime.get("top_p", 0.7) if top_p is None else top_p,

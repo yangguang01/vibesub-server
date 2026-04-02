@@ -22,7 +22,7 @@ class TranslationRequest(BaseModel):
     special_terms: Optional[str] = ""
     content_name: Optional[str] = ""
     language: str = "zh-CN"
-    model: Optional[str] = "gpt"
+    model: Optional[str] = None
     channel_name: Optional[str] = ""
 
 
