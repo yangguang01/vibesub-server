@@ -19,6 +19,7 @@ htmlcov/
 venv/
 env/
 ENV/
+.venv/
 
 # 日志文件
 logs/
@@ -39,12 +40,12 @@ tmp/
 # 系统文件
 .DS_Store 
 
-# 测试文件
+# 测试文件（作者早期的临时脚本，不入库）
 test_function.py
 test_specific_functions.py
-test/
-test*
 yt-asr-result-cn.srt
+# 注意：正式测试目录 tests/ 必须入库，所以这里不再用过宽的 "test*"/"test/" 规则
+# （原 test* 会连 tests/ 一起忽略，导致安全网无法提交——见 LESSONS.md N4）
 
 # 文档
 project_docs/
