@@ -1322,11 +1322,8 @@ def format_subtitles_v2(subtitles_dict):
 
 # 250403更新
 # 全新的长句分割方法。对于无法按照规则分割的句子，调用异步LLM分割
-def time_to_str(dt):
-    """
-    将 datetime 对象格式化为 SRT 字幕时间格式：HH:MM:SS,mmm
-    """
-    return dt.strftime("%H:%M:%S,%f")[:-3]
+# 注：原此处有一份与上方 time_to_str 完全相同的重复定义，已删除（重构 T2.2，行为不变）。
+# 保留的唯一实现见本文件上方 time_to_str。
 
 def parse_time_range(time_range_str):
     """
