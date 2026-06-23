@@ -31,6 +31,16 @@ static/subtitles/
 static/transcripts/
 tmp/
 
+# P000 真实测试的临时产物（下载的字幕、双语对照、metrics、summary、录制的 LLM 返回等，不入库）
+# 回归测试用的是 test_old_vs_new_replay.py / test_process_chunk_fake_llm.py 里的合成对抗数据，
+# 确定、最小、可复现；真实 cassette 体积大且不被任何测试依赖，故一并忽略，仅留本地排查用。
+tests/p000/_artifacts/
+tests/p000/cassettes/
+# yt-dlp 下载的原始字幕落在 CWD，临时产物不入库
+*.json3
+*.srv3
+*-splited.srt
+
 # IDE配置
 .idea/
 .vscode/
