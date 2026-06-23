@@ -43,7 +43,10 @@ TRANSCRIPTS_RETENTION_DAYS = int(os.getenv("TRANSCRIPTS_RETENTION_DAYS", "7"))
 # 功能配置
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))
 RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "2"))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50")) 
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))  # 仅用于中文长句拆分(llm_batches_split)，勿用于翻译
+# 翻译专用批大小：批越小，LLM 越不容易漏行/合并 → P000 错位率越低。
+# 各批是 asyncio.gather 并发跑的，批小不会拉长总时长。与拆分路径的 BATCH_SIZE 分开，互不影响。
+TRANSLATE_BATCH_SIZE = int(os.getenv("TRANSLATE_BATCH_SIZE", "10"))
 
 # 用量限制
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "5"))

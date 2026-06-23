@@ -15,7 +15,7 @@ import openai
 import httpx
 import assemblyai as aai
 
-from app.common.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY, ASSEMBLYAI_API_KEY,PROXY_URL
+from app.common.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, TRANSLATE_BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY, ASSEMBLYAI_API_KEY,PROXY_URL
 from app.common.core.logging import logger
 
 # 全局调试记录存储
@@ -683,19 +683,184 @@ def generate_custom_prompt(video_title: str, channel_name: str, custom_prompt: s
         full_custom_prompt = f"video title: {video_title}\nchannel name: {channel_name}"
     return full_custom_prompt
 
+
+# ============ P000 翻译对齐核心（确定性，零额外 LLM 调用） ============
+# 修复前两个错位源：process_transdict_num 按位置重编号、失败兜底把整批塌缩成一个 key。
+# 修复后保证：英文第 N 行的译文只会来自 LLM 返回里 key 为 N 的那一项；
+# LLM 没给 N 就标占位、不前移、不塌缩。详见 FIXES.md 的 P000 一节。
+PLACEHOLDER = "[未翻译]"
+
+
+def _is_valid_translation(value):
+    """是否为一条有效译文：非空字符串。空/缺失/非字符串都算没翻出来。"""
+    return isinstance(value, str) and value.strip() != ""
+
+
+def _safe_json_loads(raw):
+    """把 LLM 返回解析成 dict；解析失败或不是 dict 就返回空 dict（当作整批漏译，交给修复/占位）。"""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _try_relative_alignment(llm_json, expected_numbers):
+    """确定性兜底：LLM 没用绝对行号、而是用了 1..K 相对编号且数量恰好吻合时，
+    按相对位置一一映射回绝对行号。结构必须完全吻合（key 恰为 1..K 且每条有效），
+    否则返回 None（绝不靠猜，宁可走 LLM 修复）。"""
+    k = len(expected_numbers)
+    try:
+        keys = sorted(int(str(key).strip()) for key in llm_json.keys())
+    except (ValueError, TypeError):
+        return None
+    if keys != list(range(1, k + 1)):
+        return None
+    aligned = {}
+    for offset, n in enumerate(expected_numbers, start=1):
+        value = llm_json.get(str(offset), llm_json.get(offset))
+        if not _is_valid_translation(value):
+            return None
+        aligned[n] = value
+    return aligned
+
+
+def align_translation_by_key(llm_json, expected_numbers):
+    """按 LLM 实际返回的 key 把译文对齐到期望的绝对行号（确定性，不调用 LLM）。
+
+    参数:
+        llm_json: LLM 返回并解析后的 dict（key 可能漏、可能多、可能跳号/相对编号）。
+        expected_numbers: 本批期望的绝对行号列表（int，升序）。
+
+    返回:
+        (aligned, missing)
+        aligned: dict[int, str]，命中且有效的行号 → 译文。
+        missing: list[int]，没拿到有效译文的行号（按 expected 顺序）。
+
+    保证：绝不把某行译文挪到别的行号下；漏的行只会进 missing，不会被后面的行顶替。
+    """
+    norm = {}
+    if isinstance(llm_json, dict):
+        for key, value in llm_json.items():
+            norm[str(key).strip()] = value
+
+    aligned = {}
+    missing = []
+    for n in expected_numbers:
+        value = norm.get(str(n))
+        if _is_valid_translation(value):
+            aligned[n] = value
+        else:
+            missing.append(n)
+
+    # 主对齐一条都没命中，但可能是 LLM 整体用了相对编号 → 确定性救回
+    if aligned == {} and missing and isinstance(llm_json, dict):
+        relative = _try_relative_alignment(llm_json, expected_numbers)
+        if relative is not None:
+            logger.warning(
+                f"对齐兜底：LLM 用了相对编号 1..{len(expected_numbers)}，"
+                f"已按位置映射回 {expected_numbers[0]}..{expected_numbers[-1]}"
+            )
+            return relative, []
+
+    return aligned, missing
+
+
+def _build_repair_prompt(missing_numbers, first_item_number, end_item_number, total):
+    """缺行时给 LLM 的纠错反馈：整批重译，并点名上次漏了哪些行号、必须用绝对行号当 key。"""
+    nums = ", ".join(str(n) for n in missing_numbers)
+    return (
+        f"Your previous response did not cover all lines correctly. "
+        f"You missed or left empty these line numbers: {nums}.\n\n"
+        f"Translate ALL subtitle lines from {first_item_number} to {end_item_number} again "
+        f"({total} lines total). Use the EXACT original line number shown before each English "
+        f"line as the JSON key — do NOT renumber starting from 1. Your JSON must contain exactly "
+        f"{total} keys, covering every line number from {first_item_number} to {end_item_number} "
+        f"with no omission and no merging."
+    )
+
+
+def _record_align(video_id, chunk_info, input_data, raw, aligned, missing, attempt_type):
+    """把一次（对齐后的）翻译尝试写进调试记录，沿用 add_debug_record 的结构。"""
+    raw_text = raw if isinstance(raw, str) else str(raw)
+    formatted = '\n'.join(f"{k}: {aligned[k]}" for k in sorted(aligned))
+    output_data = {
+        'raw_response': raw_text[:500] + ("..." if len(raw_text) > 500 else ""),
+        'actual_lines': len(aligned),
+        'formatted_output': formatted,
+    }
+    result_info = {
+        'success': len(missing) == 0,
+        'line_count_match': len(aligned) == chunk_info.get('expected'),
+        'error_message': '对齐通过' if not missing else f"缺{len(missing)}行: {missing[:20]}",
+    }
+    add_debug_record(video_id, chunk_info, input_data, output_data, result_info, attempt_type)
+
+
+def _record_align_error(video_id, chunk_info, input_data, err, attempt_type):
+    """LLM 调用本身抛异常时的调试记录。"""
+    add_debug_record(
+        video_id, chunk_info, input_data,
+        {'raw_response': '', 'actual_lines': 'ERROR', 'formatted_output': f'调用失败: {err}'},
+        {'success': False, 'line_count_match': False, 'error_message': f'调用失败: {err}'},
+        attempt_type,
+    )
+
+
+def audit_translation_alignment(expected_numbers, translated_dict, video_id="unknown"):
+    """全局对齐审计（可见性兜底）：翻译全部完成后，检查每个输入行号是否都有译文、
+    哪些是占位 PLACEHOLDER。把问题收集成一句清晰日志，让作者一眼看到"这个视频第 X 行
+    没翻出来"，而不是默默错位等看视频时才发现。
+
+    返回 dict: {total, translated, missing_keys, placeholder_keys}
+    """
+    expected_set = set(expected_numbers)
+    got_set = set(translated_dict.keys())
+    missing_keys = sorted(expected_set - got_set)  # 修复后理论上应为空（process_chunk 已保证逐批补齐/占位）
+    placeholder_keys = sorted(k for k, v in translated_dict.items() if v == PLACEHOLDER)
+    total = len(expected_set)
+    ok = total - len(missing_keys) - len(placeholder_keys)
+    summary = {
+        'total': total,
+        'translated': ok,
+        'missing_keys': missing_keys,
+        'placeholder_keys': placeholder_keys,
+    }
+    if missing_keys or placeholder_keys:
+        logger.warning(
+            f"[对齐审计] 视频 {video_id}: 共 {total} 行，成功 {ok} 行；"
+            f"缺键 {len(missing_keys)} 行: {missing_keys[:30]}；"
+            f"占位 {len(placeholder_keys)} 行: {placeholder_keys[:30]}"
+        )
+    else:
+        logger.info(f"[对齐审计] 视频 {video_id}: 共 {total} 行，全部对齐成功")
+    return summary
+
+
 # 250417更新
 async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt_template, video_id="unknown"):
-    """处理单个翻译批次"""
+    """处理单个翻译批次（P000 修复版）。
+
+    保证（由代码构造保证，不依赖 LLM 老实）：
+      返回 translations 的 key 集合 == 本批期望行号集合；
+      每个行号要么是真译文、要么是占位符 PLACEHOLDER；
+      绝不塌缩成单键，绝不让译文前移顶替别的行号。
+
+    流程：调 LLM → 按 key 确定性对齐 → 仍缺行则"整批带纠错反馈重译"(RETRY_ATTEMPTS 次内) →
+    仍缺的逐行标占位。"重译"只在代码已确认缺行时触发，不是对每批都做的全量验证层。
+    """
     async with semaphore:
-        result = {
-            'translations': {}
-        }
-        
+        result = {'translations': {}}
+
+        expected_numbers = [number for number, _ in chunk]
+        if not expected_numbers:
+            return result
+
         chunk_string = ''.join(f"{number}: {sentence}\n" for number, sentence in chunk)
-        check_chunk_string = chunk_string.count('\n')
-        first_item_number = chunk[0][0] if chunk else "N/A"
-        end_item_number = first_item_number + check_chunk_string - 1
-        
+        check_chunk_string = len(expected_numbers)
+        first_item_number = expected_numbers[0]
+        end_item_number = expected_numbers[-1]
+
         # 格式化系统提示模板
         trans_json_user_prompt = system_prompt_template.format(
             custom_prompt=custom_prompt,
@@ -703,19 +868,16 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
             end_item_number=end_item_number,
             check_chunk_string=check_chunk_string
         )
-        
-        # 准备调试记录的基础信息
-        chunk_info = {
-            'first': first_item_number,
-            'end': end_item_number,
-            'expected': check_chunk_string
-        }
-        input_data = {
-            'system_prompt': trans_json_user_prompt,
-            'user_content': chunk_string.strip()
-        }
+
+        chunk_info = {'first': first_item_number, 'end': end_item_number, 'expected': check_chunk_string}
+        input_data = {'system_prompt': trans_json_user_prompt, 'user_content': chunk_string.strip()}
+
+        aligned = {}
+        missing = list(expected_numbers)
+        last_raw = ''
+
+        # ---------- 初次翻译 ----------
         try:
-            # 初次API调用
             response = await safe_api_call_async(
                 client=client,
                 messages=[
@@ -724,167 +886,56 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_p
                 ],
                 model=model
             )
-
-            translated_string = response.choices[0].message.content
-            
-            try:
-                trans_to_json = json.loads(translated_string)
-            except json.JSONDecodeError as e:
-                # JSON解析失败的调试记录
-                output_data = {
-                    'raw_response': translated_string[:500] + ("..." if len(translated_string) > 500 else ""),
-                    'actual_lines': 'JSON_ERROR',
-                    'formatted_output': f'JSON解析失败: {str(e)}'
-                }
-                result_info = {
-                    'success': False,
-                    'line_count_match': False,
-                    'error_message': f'JSON解析失败: {str(e)}'
-                }
-                add_debug_record(video_id, chunk_info, input_data, output_data, result_info, "initial")
-                raise
-
-            # 行数检查
-            check_translated = len(trans_to_json)
-            
-            # 格式化输出用于调试记录
-            formatted_output = '\n'.join(f"{k}: {v}" for k, v in trans_to_json.items())
-            
-            output_data = {
-                'raw_response': translated_string[:500] + ("..." if len(translated_string) > 500 else ""),
-                'actual_lines': check_translated,
-                'formatted_output': formatted_output
-            }
-            
-            if check_chunk_string == check_translated:
+            last_raw = response.choices[0].message.content
+            aligned, missing = align_translation_by_key(_safe_json_loads(last_raw), expected_numbers)
+            if not missing:
                 logger.info(f'编号{first_item_number}一次性通过')
-                # 成功的调试记录
-                result_info = {
-                    'success': True,
-                    'line_count_match': True,
-                    'error_message': '一次通过'
-                }
-                add_debug_record(video_id, chunk_info, input_data, output_data, result_info, "initial")
-                
-                # 正常处理流程
-                new_num_dict = process_transdict_num(trans_to_json, first_item_number, end_item_number)
-                translated_dict = process_translated_string(new_num_dict)
-                result['translations'].update(translated_dict)
             else:
-                # 进入重试逻辑，先记录初次失败
-                result_info = {
-                    'success': False,
-                    'line_count_match': False,
-                    'error_message': f'行数不匹配，进入重试逻辑'
-                }
-                add_debug_record(video_id, chunk_info, input_data, output_data, result_info, "initial")
-                
-                logger.info(f'编号{first_item_number}进入重试逻辑!!!')
-                retry_prompt_v2 = f'''
-                The previous translation had a mismatch (English: {check_chunk_string} lines, Chinese: {check_translated} lines).
-
-                Please carefully translate each line individually, maintaining a strict one-to-one match between English and Chinese lines (lines {first_item_number}-{end_item_number}, total {check_chunk_string} lines).
-
-                Return your translation in this JSON format:
-
-                {{
-                "1": "<Translated line 1>",
-                "2": "<Translated line 2>",
-                ...
-                }}
-                '''
-
-                try:
-                    # 重试API调用
-                    @retry(stop=stop_after_attempt(2))
-                    async def retry_call():
-                        return await safe_api_call_async(
-                            client=client,
-                            messages=[
-                                {"role": "system", "content": trans_json_user_prompt},
-                                {"role": "assistant", "content": translated_string},
-                                {"role": "user", "content": retry_prompt_v2}
-                            ],
-                            model=model
-                        )
-                        
-                    retry_response = await retry_call()
-                    
-                    retry_translated_string = retry_response.choices[0].message.content
-
-                    # 强制重复验证
-                    try:
-                        retrytrans_to_json = json.loads(retry_translated_string)
-                    except json.JSONDecodeError as e:
-                        # 重试JSON解析失败的调试记录
-                        retry_output_data = {
-                            'raw_response': retry_translated_string[:500] + ("..." if len(retry_translated_string) > 500 else ""),
-                            'actual_lines': 'JSON_ERROR',
-                            'formatted_output': f'重试JSON解析失败: {str(e)}'
-                        }
-                        retry_result_info = {
-                            'success': False,
-                            'line_count_match': False,
-                            'error_message': f'重试JSON解析失败: {str(e)}'
-                        }
-                        retry_input_data = {
-                            'system_prompt': trans_json_user_prompt,
-                            'user_content': retry_prompt_v2.strip()
-                        }
-                        add_debug_record(video_id, chunk_info, retry_input_data, retry_output_data, retry_result_info, "retry")
-                        logger.error(f"重试响应JSON解析失败: {retry_translated_string}")
-                        raise
-
-                    # 重复行数检查
-                    check_retry = len(retrytrans_to_json)
-                    
-                    # 准备重试的调试记录
-                    retry_formatted_output = '\n'.join(f"{k}: {v}" for k, v in retrytrans_to_json.items())
-                    retry_output_data = {
-                        'raw_response': retry_translated_string[:500] + ("..." if len(retry_translated_string) > 500 else ""),
-                        'actual_lines': check_retry,
-                        'formatted_output': retry_formatted_output
-                    }
-                    retry_input_data = {
-                        'system_prompt': trans_json_user_prompt,
-                        'user_content': retry_prompt_v2.strip()
-                    }
-                    
-                    if check_retry == check_chunk_string:
-                        # 处理成功重试
-                        logger.info(f"编号{first_item_number}重试有效！")
-                        
-                        # 重试成功的调试记录
-                        retry_result_info = {
-                            'success': True,
-                            'line_count_match': True,
-                            'error_message': '重试成功'
-                        }
-                        add_debug_record(video_id, chunk_info, retry_input_data, retry_output_data, retry_result_info, "retry")
-                        
-                        # 对翻译后的字符串进行处理
-                        new_num_dict = process_transdict_num(retrytrans_to_json, first_item_number, end_item_number)
-                        translated_dict = process_translated_string(new_num_dict)
-                        
-                        result['translations'].update(translated_dict)
-                    else:
-                        # 重试仍然失败的调试记录
-                        retry_result_info = {
-                            'success': False,
-                            'line_count_match': False,
-                            'error_message': f'重试后行数仍不匹配 ({check_retry} vs {check_chunk_string})'
-                        }
-                        add_debug_record(video_id, chunk_info, retry_input_data, retry_output_data, retry_result_info, "retry")
-                        raise ValueError(f"编号{first_item_number}重试后行数仍不匹配 ({check_retry} vs {check_chunk_string})")
-
-                except Exception as retry_error:
-                    logger.error(f"重试失败: {str(retry_error)}")
-                    result['translations'][first_item_number] = f"翻译失败: {str(retry_error)}"
-
+                logger.info(f'编号{first_item_number}首次缺{len(missing)}行，进入纠错重译')
+            _record_align(video_id, chunk_info, input_data, last_raw, aligned, missing, "initial")
         except Exception as main_error:
-            logger.error(f"主流程错误: {str(main_error)}")
-            result['translations'][first_item_number] = f"关键错误: {str(main_error)}"
+            logger.error(f"编号{first_item_number}初次翻译调用失败: {str(main_error)}")
+            _record_align_error(video_id, chunk_info, input_data, str(main_error), "initial")
 
+        # ---------- 缺行 → 整批带纠错反馈重译（确定性触发，非全量验证） ----------
+        attempt = 0
+        while missing and attempt < RETRY_ATTEMPTS:
+            attempt += 1
+            repair_prompt = _build_repair_prompt(missing, first_item_number, end_item_number, check_chunk_string)
+            repair_user = chunk_string + "\n\n" + repair_prompt
+            repair_input = {'system_prompt': trans_json_user_prompt, 'user_content': repair_user}
+            try:
+                repair_resp = await safe_api_call_async(
+                    client=client,
+                    messages=[
+                        {"role": "system", "content": trans_json_user_prompt},
+                        {"role": "user", "content": repair_user}
+                    ],
+                    model=model
+                )
+                last_raw = repair_resp.choices[0].message.content
+                repair_aligned, _ = align_translation_by_key(_safe_json_loads(last_raw), expected_numbers)
+                # 只补此前仍缺的行，不覆盖已对齐好的译文
+                for n in list(missing):
+                    if n in repair_aligned:
+                        aligned[n] = repair_aligned[n]
+                missing = [n for n in expected_numbers if n not in aligned]
+                _record_align(video_id, chunk_info, repair_input, last_raw, aligned, missing, f"repair{attempt}")
+                logger.info(f"编号{first_item_number}第{attempt}次纠错重译后仍缺{len(missing)}行")
+            except Exception as repair_error:
+                logger.error(f"编号{first_item_number}第{attempt}次纠错重译调用失败: {str(repair_error)}")
+                _record_align_error(video_id, chunk_info, repair_input, str(repair_error), f"repair{attempt}")
+                break
+
+        # ---------- 仍缺的逐行占位（永不塌缩、永不前移） ----------
+        if missing:
+            logger.warning(f"编号{first_item_number}最终仍有{len(missing)}行未翻译，标占位: {missing[:20]}")
+        for n in missing:
+            aligned[n] = PLACEHOLDER
+
+        # ---------- 标点清洗后写回（key 为 int，集合恰等于 expected_numbers） ----------
+        cleaned = process_translated_string({str(n): aligned[n] for n in expected_numbers})
+        result['translations'].update(cleaned)
         return result
 
 
@@ -1026,6 +1077,14 @@ def map_chinese_to_time_ranges_v2(chinese_content, merged_engsentence_to_subtitl
                 "time_range": time_range,
                 "text": chinese_sentence
             }
+
+    # 防御性日志：修复 P000 后，正常情况下每行中文都应能匹配到时间轴。
+    # 若仍有中文行被丢弃，说明上游行号与时间轴字典不一致，记日志以免静默丢行。
+    if len(chinese_to_time) != len(chinese_content):
+        dropped = sorted(set(chinese_content) - set(chinese_to_time))
+        logger.warning(
+            f"[时间轴映射] {len(dropped)} 行中文未匹配到时间轴被丢弃: {dropped[:30]}"
+        )
 
     return chinese_to_time
 
@@ -1796,8 +1855,8 @@ async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, 
 
     # 创建批次处理任务
     tasks = []
-    for i in range(0, len(items), BATCH_SIZE):
-        chunk = items[i:i + BATCH_SIZE]
+    for i in range(0, len(items), TRANSLATE_BATCH_SIZE):
+        chunk = items[i:i + TRANSLATE_BATCH_SIZE]
         tasks.append(
             process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt, video_id)
         )
@@ -1817,6 +1876,10 @@ async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, 
         total_translated_dict.update(translations)
 
     logger.info(f'使用的模型：{model}')
+
+    # P000 全局对齐审计：确认每个输入行号都有译文/占位，缺失或占位都记日志（可见性兜底）
+    expected_numbers = [number for number, _ in items]
+    audit_translation_alignment(expected_numbers, total_translated_dict, video_id)
 
     return total_translated_dict
 
@@ -1868,13 +1931,12 @@ def get_system_prompt_for_model(model):
         ## Constraints
         - For punctuation requirements: Do not add a period when the sentence ends
         - The provided subtitles range from line {first_item_number} to line {end_item_number}, totaling {check_chunk_string} lines.
-        - Provide the Chinese translation in the specified JSON format:
+        - CRITICAL — line numbering: each input line is prefixed with its own absolute line number (e.g. "{first_item_number}: ..."). Use that EXACT number as the JSON key; do NOT renumber starting from 1. Return exactly {check_chunk_string} keys so that every line number from {first_item_number} to {end_item_number} appears exactly once. If one sentence is split across two lines, put the same translation under both line numbers (still output both keys).
+        - Provide the Chinese translation as a JSON object whose keys are the original line numbers, for example:
           ```
           {{
-          "1": "<Translation of subtitle line 1>",
-          "2": "<Translation of subtitle line 2>",
-          "3": "<Translation of subtitle line 3>",
-          ...
+          "{first_item_number}": "<Chinese translation of line {first_item_number}>",
+          "{end_item_number}": "<Chinese translation of line {end_item_number}>"
           }}
           ```
         """
@@ -1907,13 +1969,12 @@ def get_system_prompt_for_model(model):
         ## Constraints
         - For punctuation requirements: Do not add a period when the sentence ends
         - The provided subtitles range from line {first_item_number} to line {end_item_number}, totaling {check_chunk_string} lines.
-        - Provide the Chinese translation in the specified JSON format:
+        - CRITICAL — line numbering: each input line is prefixed with its own absolute line number (e.g. "{first_item_number}: ..."). Use that EXACT number as the JSON key; do NOT renumber starting from 1. Return exactly {check_chunk_string} keys so that every line number from {first_item_number} to {end_item_number} appears exactly once. If one sentence is split across two lines, put the same translation under both line numbers (still output both keys).
+        - Provide the Chinese translation as a JSON object whose keys are the original line numbers, for example:
           ```
           {{
-          "1": "<Translation of subtitle line 1>",
-          "2": "<Translation of subtitle line 2>",
-          "3": "<Translation of subtitle line 3>",
-          ...
+          "{first_item_number}": "<Chinese translation of line {first_item_number}>",
+          "{end_item_number}": "<Chinese translation of line {end_item_number}>"
           }}
           ```
         """
