@@ -5,8 +5,9 @@
 - 再按优先级 **下载** 自动字幕（至多再 1 次调用）
 - 支持全局 `PROXY_URL` 设置代理
 - 探测/下载两步都带**退避重试**（仅对暂时性失败重试）
-- 区分**永久失败**（私有/不存在/无字幕/无效 URL）与**暂时失败**（限流/超时/5xx），
+- 区分**永久失败**（私有/不存在/无效 URL）与**暂时失败**（限流/超时/5xx），
   分别抛出 `PermanentSubtitleError` / `TemporarySubtitleError`
+- **没有自动字幕**不算失败：返回 `(None, title, channel)`，由调用方回退音频 ASR 兜底
 - 仅公开一个函数：`download_auto_subtitle(url)` 与两个异常类型
 
 依赖：
@@ -54,7 +55,11 @@ class SubtitleFetchError(Exception):
 
 
 class PermanentSubtitleError(SubtitleFetchError):
-    """永久失败：私有/已删除/无字幕/无效 URL。**不应重试，也不应走音频兜底。**"""
+    """永久失败：私有/已删除/无效 URL 等「视频本身不可用」。**不应重试，也不应走音频兜底**（音频同样下不到）。
+
+    注意：「视频没有自动字幕」**不属于**永久失败——那是走音频 ASR 兜底的正常信号，
+    由 download_auto_subtitle 返回 None 表示。
+    """
 
     user_message = "该视频无法获取字幕"
 
@@ -218,7 +223,7 @@ def _download_subtitle(url: str, ext: str) -> Path:
     raise TemporarySubtitleError("字幕下载未成功，请稍后重试")
 
 
-def download_auto_subtitle(url: str) -> Tuple[Path, str, str]:
+def download_auto_subtitle(url: str) -> Tuple[Optional[Path], str, str]:
     """下载 YouTube 自动字幕（json3 → srv3）。
 
     参数
@@ -229,12 +234,14 @@ def download_auto_subtitle(url: str) -> Tuple[Path, str, str]:
     返回
     ------
     tuple
-        `(字幕文件 Path, 视频标题, 频道名称)` —— 仅在成功时返回，Path 非空。
+        `(字幕文件 Path | None, 视频标题, 频道名称)`：
+        - 成功抓到字幕 → Path 非空。
+        - **该视频没有自动字幕 → Path 为 None**，调用方应回退到音频 ASR 兜底（这是正常路径，不是错误）。
 
     异常
     ------
     PermanentSubtitleError
-        视频私有/已删除/无字幕/链接无效。调用方应直接置 failed，**不要走音频兜底**。
+        视频私有/已删除/链接无效等「视频本身不可用」。调用方应直接置 failed，**不要走音频兜底**（音频同样下不到）。
     TemporarySubtitleError
         限流/网络/超时等暂时性失败（已退避重试用尽）。调用方可选择走音频兜底。
     """
@@ -244,11 +251,13 @@ def download_auto_subtitle(url: str) -> Tuple[Path, str, str]:
     title = info.get("title", "")
     channel = info.get("uploader") or info.get("channel", "")
 
-    # ② 选择可用字幕格式：没有自动字幕 = 永久失败（不重试、不兜底）
+    # ② 选择可用字幕格式：没有自动字幕 ≠ 失败，而是「该走音频兜底」的信号。
+    #    返回 None 让调用方回退到「下音频 + AssemblyAI ASR」——这正是兜底链路的用途。
+    #    （只有视频本身不可用，如私有/已删/无效 URL，才由 _probe_video 抛 Permanent 而停止。）
     chosen_ext = _select_caption(info)
     if not chosen_ext:
-        logger.info("未找到自动字幕（永久失败，不走音频兜底）：%s (%s)", url, _LANG)
-        raise PermanentSubtitleError("该视频未提供英文字幕")
+        logger.info("未找到 YouTube 自动字幕，回退音频 ASR 兜底：%s (%s)", url, _LANG)
+        return None, title, channel
 
     # ③ 下载字幕（带重试）
     path = _download_subtitle(url, chosen_ext)
