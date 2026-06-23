@@ -5,7 +5,13 @@ from typing import Dict, Any
 from google.cloud import tasks_v2
 import uuid
 
-from app.common.core.config import GOOGLE_CLOUD_PROJECT, SERVICE_URL
+from datetime import timedelta
+
+from app.common.core.config import (
+    GOOGLE_CLOUD_PROJECT,
+    SERVICE_URL,
+    CLOUD_TASKS_DISPATCH_DEADLINE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +56,15 @@ class CloudTasksManager:
                     # 可选：添加认证头
                     "User-Agent": "CloudTasks-Translation-Worker"
                 },
-            }
+            },
+            # dispatch deadline：Cloud Tasks 等待端点返回 200 的最长时间。
+            # 端点现在改成"立刻返回 200 + 后台跑翻译"，所以这里只需覆盖端点响应的
+            # 几秒~几十秒即可，而不是覆盖整条十几分钟的翻译流程。
+            # 这样可避免旧逻辑下"端点同步跑十几分钟、Cloud Tasks 等不到 200 就判失败
+            # 并重试 → 同一视频并发跑两遍"的隐患。
+            "dispatch_deadline": timedelta(seconds=CLOUD_TASKS_DISPATCH_DEADLINE),
         }
-        
-        # 可选：设置任务调度时间（立即执行可以不设置）
-        # task["schedule_time"] = {"seconds": int(time.time()) + delay_seconds}
-        
+
         response = client.create_task(parent=parent, task=task)
         return response.name
     
