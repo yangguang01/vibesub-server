@@ -13,8 +13,9 @@ from app.common.models.schemas import (
 from app.worker.processor import create_translation_task, get_task_status, get_task_translation_strategies
 from app.common.services.firestore import db
 from app.common.models.firestore_models import (
-    get_task, get_user_tasks, count_user_tasks, check_user_daily_limit, get_video_task, create_user_task, create_or_update_video_task, update_video_task, record_successful_request, get_user_limit_info, get_video_id_from_task
+    get_task, get_user_tasks, count_user_tasks, check_user_daily_limit, get_video_task, create_user_task, create_or_update_video_task, update_video_task, record_successful_request, get_user_limit_info, get_video_id_from_task, is_stale_processing, fail_if_stale_processing
 )
+from app.common.core.config import STALE_TASK_MINUTES
 from app.common.utils.auth import verify_firebase_session, get_current_user_id
 from app.common.core.logging import logger
 from app.common.utils.youtube import extract_video_id, get_video_id_by_yt_dlp
@@ -56,23 +57,41 @@ async def translate_video(request: TranslationRequest, user_id: str = Depends(ge
     # 创建任务id，判断结果是否存在
     task_id = str(uuid.uuid4())
 
-    # 检查video_id对应的任务是否已存在且已完成
+    # 🔥 P0-timeout 幂等去重：根据 video 现有状态决定复用 / 拦截 / 重发
+    #   - completed                → 复用结果（不重新下发、不并发跑）
+    #   - 新鲜的 processing/pending → 已有任务在跑，不再下发新 Cloud Task，直接回当前状态
+    #   - 陈旧 processing / failed  → 允许重新下发（落到下面的正常下发流程）
     video_task = await loop.run_in_executor(executor, get_video_task, video_id)
-    if video_task and video_task.get("status") == "completed":
-        logger.info("已存在，复用翻译结果")
-        # 已完成，写入用户任务信息
-        await loop.run_in_executor(
-            executor, create_user_task, user_id, video_id, youtube_url, task_id, False
-        )
-        await loop.run_in_executor(
-            executor, create_or_update_video_task, video_id, request.content_name, youtube_url, user_id
-        )
-        await loop.run_in_executor(
-            executor, record_successful_request, user_id, video_id, request.content_name
-        )
-        return {"task_id": task_id, "status": video_task.get("status", "completed")}
+    if video_task:
+        status = video_task.get("status")
+        if status == "completed":
+            logger.info("已存在，复用翻译结果")
+            # 已完成，写入用户任务信息
+            await loop.run_in_executor(
+                executor, create_user_task, user_id, video_id, youtube_url, task_id, False
+            )
+            await loop.run_in_executor(
+                executor, create_or_update_video_task, video_id, request.content_name, youtube_url, user_id
+            )
+            await loop.run_in_executor(
+                executor, record_successful_request, user_id, video_id, request.content_name
+            )
+            return {"task_id": task_id, "status": video_task.get("status", "completed")}
 
-    # 从来没有翻译的视频，创建翻译任务
+        # 进行中且未陈旧 → 不重复下发（避免并发再跑、重复扣用量、存两份字幕）
+        active_states = ("processing", "pending", "strategies_ready")
+        if status in active_states and not is_stale_processing(video_task, STALE_TASK_MINUTES):
+            logger.info(f"video {video_id} 已有进行中任务（{status}），不重复下发，直接返回当前状态")
+            # 仍登记用户任务，让该用户能查到这个 task_id 的状态（不计为新请求）
+            await loop.run_in_executor(
+                executor, create_user_task, user_id, video_id, youtube_url, task_id, False
+            )
+            return {"task_id": task_id, "status": status}
+
+        # 其余（failed / 陈旧 processing）→ 落到下面，允许重新下发
+        logger.info(f"video {video_id} 现状态={status}，允许重新下发翻译任务")
+
+    # 从来没有翻译的视频，或允许重发的视频，创建翻译任务
     await loop.run_in_executor(
         executor, create_user_task, user_id, video_id, youtube_url, task_id, True
     )
