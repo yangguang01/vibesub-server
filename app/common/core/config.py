@@ -36,6 +36,15 @@ TRANSCRIPTION_TIMEOUT = int(os.getenv("TRANSCRIPTION_TIMEOUT", "300"))  # 转写
 TRANSLATION_TIMEOUT = int(os.getenv("TRANSLATION_TIMEOUT", "300"))    # 翻译：5分钟
 TOTAL_TASK_TIMEOUT = int(os.getenv("TOTAL_TASK_TIMEOUT", "900"))      # 总超时：15分钟
 
+# 🔥 P0-timeout 根治相关配置
+# 陈旧任务看门狗：status==processing 且 updated_at 距今超过此分钟数 → 判 failed
+# 默认 30 分钟，须 >= TOTAL_TASK_TIMEOUT(15min) 以免误杀正常长任务
+STALE_TASK_MINUTES = int(os.getenv("STALE_TASK_MINUTES", "30"))
+# Cloud Tasks dispatch deadline（秒）：端点现在立刻返回 200，
+# 这个 deadline 只需覆盖"端点响应"的几秒~几十秒即可，不用拉到 30 分钟。
+# Cloud Tasks HTTP 任务该值上限约 30 分钟（1800s），此处取保守的 60s。
+CLOUD_TASKS_DISPATCH_DEADLINE = int(os.getenv("CLOUD_TASKS_DISPATCH_DEADLINE", "60"))
+
 # 文件保留配置
 SUBTITLES_RETENTION_DAYS = int(os.getenv("SUBTITLES_RETENTION_DAYS", "7"))
 TRANSCRIPTS_RETENTION_DAYS = int(os.getenv("TRANSCRIPTS_RETENTION_DAYS", "7"))

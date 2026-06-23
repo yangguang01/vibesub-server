@@ -432,6 +432,72 @@ def get_video_task(video_id: str) -> Optional[Dict[str, Any]]:
     snap = _video_ref(video_id).get()
     return snap.to_dict() if snap.exists else None
 
+
+def is_stale_processing(task_data: Optional[Dict[str, Any]], stale_minutes: int) -> bool:
+    """
+    判断一个 video 任务是否是"陈旧的 processing"——即仍处于进行中状态、
+    但 updated_at 距今已超过 stale_minutes 分钟（很可能实例被硬杀、任务僵死）。
+
+    用于 P0-timeout 看门狗：在 fire-and-forget 后台执行模型下，实例可能被回收
+    导致任务来不及写 failed，靠这里把僵尸 processing 判定为失败。
+
+    参数:
+        task_data: get_video_task() 的返回（可能为 None）
+        stale_minutes: 超过多少分钟未更新视为陈旧
+    返回:
+        True 表示陈旧、应被判失败；其它情况返回 False（含数据缺失/无法判断时保守不判）
+    """
+    if not task_data:
+        return False
+    # 仅处理"进行中"的中间态；completed/failed/strategies_ready 之外的活跃态都纳入
+    status = task_data.get("status")
+    if status not in ("processing", "pending", "strategies_ready"):
+        return False
+
+    last = task_data.get("updated_at") or task_data.get("created_at")
+    if last is None:
+        # 没有时间戳无法判断，保守地不判失败（避免误杀刚写入、时间戳还没回填的任务）
+        return False
+
+    # Firestore 读回的是 tz-aware 的 DatetimeWithNanoseconds；统一成 aware UTC 再比较
+    if isinstance(last, datetime):
+        last_dt = last
+    else:
+        return False
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    age_minutes = (now - last_dt).total_seconds() / 60.0
+    return age_minutes > stale_minutes
+
+
+def fail_if_stale_processing(video_id: str, stale_minutes: int) -> Optional[Dict[str, Any]]:
+    """
+    看门狗（方案 A）：检查 video_id 是否陈旧 processing，是则就地置 failed 并返回更新后的快照。
+
+    用户查询状态时顺手调用：一刷新就看到明确失败，而不是无限转圈。
+    不引入新组件、不开新定时任务。
+
+    返回:
+        最新的 video 任务字典（可能已被改成 failed），或 None（任务不存在）
+    """
+    task_data = get_video_task(video_id)
+    if task_data is None:
+        return None
+    if is_stale_processing(task_data, stale_minutes):
+        logger.warning(
+            f"⏰ 看门狗：video {video_id} 处于陈旧 processing（>{stale_minutes}min 未更新），判定为 failed"
+        )
+        update_video_task(
+            video_id,
+            "failed",
+            error="任务中断（长时间无进展），请重试",
+        )
+        # 重新读取，返回最新状态
+        return get_video_task(video_id)
+    return task_data
+
 # def get_video_task(video_id: str) -> Optional[Dict[str, Any]]:
 #     """获取视频任务文档，返回字典或 None，并且注入 task_id"""
 #     snap = _video_ref(video_id).get()
