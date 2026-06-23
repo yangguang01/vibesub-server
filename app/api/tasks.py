@@ -213,8 +213,14 @@ async def get_task_status_endpoint(task_id: str, user_id: str = Depends(get_curr
     loop = asyncio.get_event_loop()
 
     video_id = await loop.run_in_executor(executor, get_video_id_from_task, task_id)
-    task_info = await loop.run_in_executor(executor, get_video_task, video_id)
-    
+    # 🔥 P0-timeout 看门狗（方案 A）：查询状态时顺手判断"陈旧 processing"。
+    # 若实例硬崩溃来不及写 failed，任务会僵在 processing；这里就地置 failed，
+    # 用户一刷新就看到明确失败，而不是无限转圈。fail_if_stale_processing 在不陈旧
+    # 时等价于普通 get_video_task。
+    task_info = await loop.run_in_executor(
+        executor, fail_if_stale_processing, video_id, STALE_TASK_MINUTES
+    )
+
     if task_info is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
