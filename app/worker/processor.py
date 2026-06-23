@@ -25,7 +25,12 @@ from app.common.services.translation import (
 )
 from app.common.models.firestore_models import get_task, create_or_update_video_task, update_video_task, record_successful_request
 from app.common.services.storage import bucket
-from app.common.services.download_ytsub import download_auto_subtitle
+from app.common.services.download_ytsub import (
+    download_auto_subtitle,
+    PermanentSubtitleError,
+    TemporarySubtitleError,
+    SubtitleFetchError,
+)
 from app.common.services.process_ytsub import process_ytsub
 
 
@@ -62,7 +67,20 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
 
         # 优先使用yt 自动生成的英文字幕
         try:
-            yt_sub_path, video_title, channel_name = download_auto_subtitle(youtube_url)
+            # 抓取字幕：永久失败（私有/无字幕/链接无效）直接置 failed、不走音频兜底；
+            # 暂时失败（限流/网络，内部已退避重试用尽）才回退到音频流程。
+            try:
+                yt_sub_path, video_title, channel_name = download_auto_subtitle(youtube_url)
+            except PermanentSubtitleError as e:
+                logger.error(f"字幕抓取永久失败，不走音频兜底: {e}")
+                await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.1, [], e.user_message)
+                raise
+            except TemporarySubtitleError as e:
+                logger.warning(f"字幕抓取暂时失败（重试已用尽），回退音频兜底: {e}")
+                yt_sub_path = None
+                video_title = ""
+                channel_name = ""
+
             if yt_sub_path:
                 try:
                     srt_text = process_ytsub(yt_sub_path)
@@ -74,9 +92,9 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
                     await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.3, trans_strategies)
                 except Exception as e:
                     logger.error(f"处理YouTube字幕失败: {e}")
-                    # 回退到音频下载流程
+                    # 字幕已抓到但解析/策略失败：回退到音频下载流程
                     yt_sub_path = None
-            
+
             if not yt_sub_path:
                 # 执行音频下载流程
                 logger.info("开始下载音频...")
@@ -85,7 +103,7 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
                     await loop.run_in_executor(executor, update_video_task, video_id, "processing", 0.2)
                 except Exception as e:
                     logger.error(f"音频下载失败: {e}")
-                    await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.1, [], f"音频下载失败: {str(e)}")
+                    await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.1, [], "无法下载该视频的音频，请稍后重试")
                     raise
 
                 # 进度0.4：生成翻译策略
@@ -120,11 +138,14 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
                     await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
                 except Exception as e:
                     logger.error(f"ASR处理失败: {e}")
-                    await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.3, trans_strategies, f"ASR处理失败: {str(e)}")
+                    await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.3, trans_strategies, "语音识别失败，请稍后重试")
                     raise
+        except SubtitleFetchError:
+            # 永久失败已在上面写过用户文案，这里仅向上传递、不覆盖文案
+            raise
         except Exception as e:
             logger.error(f"字幕获取阶段失败: {e}")
-            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.1, [], f"字幕获取失败: {str(e)}")
+            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0.1, [], "获取视频字幕失败，请稍后重试")
             raise
 
         # 进度0.8：开始翻译
@@ -196,7 +217,9 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
             except Exception as debug_error:
                 logger.error(f"保存失败任务的调试记录时出错: {str(debug_error)}")
                 
-            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0, trans_strategies, str(e))
+            # SubtitleFetchError 带用户可读文案，优先用它；其他异常回落原始信息
+            user_error = getattr(e, "user_message", None) or str(e)
+            await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0, trans_strategies, user_error)
         
 
 async def create_translation_task(
