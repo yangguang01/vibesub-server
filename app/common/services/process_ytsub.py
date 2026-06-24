@@ -21,10 +21,11 @@ from typing import List, Dict, Tuple, Optional
 from openai import OpenAI
 
 from app.common.core.logging import logger
+from app.common.core.config import DEEPSEEK_API_KEY
 
 
 # ──────────────────────────────── 默认配置 ─────────────────────────────── #
-DEFAULT_LLM_MODEL    = "gpt-4.1"                                      # 可换更大模型
+DEFAULT_LLM_MODEL    = "deepseek-chat"                               # 全程走 DeepSeek（原 gpt-4.1）
 DEFAULT_MAX_WORDS    = 100     # 单句超过多少词视为"长句"
 DEFAULT_CHUNK_SIZE   = 10     # 每次发送给 LLM 的长句条数
 DEFAULT_MIN_DURATION = 100    # 每条短句最少时长（ms）
@@ -199,7 +200,7 @@ def chunks(lst: List, size: int):
 
 def call_llm_batch(batch_sent: List[Sentence], llm_model: str = DEFAULT_LLM_MODEL, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Dict[str, List[str]]:
     """
-    使用 client.responses.create 调 LLM。
+    使用 DeepSeek chat.completions 调 LLM。
     每批 <= CHUNK_SIZE 条长句。
     返回 { original_text: [短句1, 短句2, ...] }
     """
@@ -207,28 +208,22 @@ def call_llm_batch(batch_sent: List[Sentence], llm_model: str = DEFAULT_LLM_MODE
     sentence_texts = [s.as_text() for s in batch_sent]
     user_payload = json.dumps({"sentences": sentence_texts}, ensure_ascii=False)
 
-    # 2) 构造 input 消息列表 —— 仅需 system + user 两条
-    inputs = [
-        {
-            "role": "system",
-            "content": [{"type": "input_text", "text": SYSTEM_PROMPT}],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "input_text", "text": user_payload}],
-        },
+    # 2) 构造 chat messages —— 仅需 system + user 两条
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_payload},
     ]
 
-    # 3) 调用 responses.create
-    client = OpenAI()
+    # 3) 调用 DeepSeek（用 chat.completions；DeepSeek 不支持 OpenAI 的 Responses API）
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
-    raw_json = client.responses.create(
-        model=llm_model,                 # 如 "gpt-4o-mini" / "gpt-4.1"
-        input=inputs,
-        text={"format": {"type": "json_object"}},  # 强制 JSON
+    raw_json = client.chat.completions.create(
+        model=llm_model,                 # deepseek-chat
+        messages=messages,
+        response_format={"type": "json_object"},  # 强制 JSON
         temperature=0,
-        max_output_tokens=20000,          # 依需要调整
-    ).output_text
+        max_tokens=8192,                  # DeepSeek deepseek-chat 输出上限
+    ).choices[0].message.content
 
     data = json.loads(raw_json)
     

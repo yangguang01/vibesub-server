@@ -227,9 +227,9 @@ async def create_translation_task(
     user_id,
     video_id,
     content_name,
-    special_terms="", 
-    language="zh-CN", 
-    model="gpt", 
+    special_terms="",
+    language="zh-CN",
+    model="deepseek",
 ):
     """
     创建新的翻译任务

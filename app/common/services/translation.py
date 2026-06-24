@@ -1613,7 +1613,7 @@ def async_retry(max_attempts=None, exceptions=None):
         return wrapper
     return decorator
 
-async def llm_batches_split(long_sentences, model='gpt-4.1-mini'):
+async def llm_batches_split(long_sentences, model='deepseek-chat'):
     """
     使用LLM分割长句子,创建异步任务
 
@@ -1640,10 +1640,10 @@ async def llm_batches_split(long_sentences, model='gpt-4.1-mini'):
     # 创建锁和信号量
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)  # 使用MAX_CONCURRENT_TASKS配置
 
-    # 创建异步OpenAI客户端
+    # 创建异步客户端（DeepSeek）
     client = AsyncOpenAI(
-        api_key=OPENAI_API_KEY,
-        #base_url="https://api.deepseek.com"
+        api_key=DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com",
     )
 
     # 创建批次处理任务
@@ -1778,7 +1778,7 @@ async def split_process_chunk(chunk, model, client, semaphore):
     return result
 
 # 250403更新
-async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_choice="gpt", special_terms="", content_name="", video_id="unknown"):
+async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_choice="deepseek", special_terms="", content_name="", video_id="unknown"):
     """
     统一的字幕翻译函数，支持不同模型选择
     
@@ -1792,30 +1792,30 @@ async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_ch
     Returns:
         翻译后的字典
     """
-    if model_choice.lower() == "deepseek":
-        model = 'deepseek-chat'
-        return await translate_with_model(
-            numbered_sentences_chunks, 
-            custom_prompt, 
-            model=model,
-            api_key=DEEPSEEK_API_KEY,
-            special_terms=special_terms, 
-            content_name=content_name,
-            video_id=video_id
-        )
-    elif model_choice.lower() == "gpt":
+    choice = (model_choice or "deepseek").lower()
+    if choice == "gpt":
         model = 'gpt-4.1-mini'
         return await translate_with_model(
-            numbered_sentences_chunks, 
-            custom_prompt, 
+            numbered_sentences_chunks,
+            custom_prompt,
             model=model,
             api_key=OPENAI_API_KEY,
-            special_terms=special_terms, 
+            special_terms=special_terms,
             content_name=content_name,
             video_id=video_id
         )
     else:
-        raise ValueError(f"不支持的模型选择: {model_choice}，请选择 'deepseek' 或 'gpt'")
+        # 默认走 DeepSeek（含空值/未知值兜底）——全程不依赖 OpenAI
+        model = 'deepseek-chat'
+        return await translate_with_model(
+            numbered_sentences_chunks,
+            custom_prompt,
+            model=model,
+            api_key=DEEPSEEK_API_KEY,
+            special_terms=special_terms,
+            content_name=content_name,
+            video_id=video_id
+        )
 
 async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, api_key, special_terms="", content_name="", video_id="unknown"):
     """
@@ -1989,7 +1989,8 @@ async def get_video_context_from_llm(title, channel_name):
         logger.info("开始执行get_video_context_from_llm...")
 
         client = AsyncOpenAI(
-            api_key=OPENAI_API_KEY,
+            api_key=DEEPSEEK_API_KEY,
+            base_url="https://api.deepseek.com",
             timeout=API_TIMEOUT
         )
 
@@ -1999,11 +2000,11 @@ async def get_video_context_from_llm(title, channel_name):
                 ]
 
         response = await client.chat.completions.create(
-            model="gpt-4.1",
+            model="deepseek-chat",
             response_format={'type': "json_object"},
             messages=messages,
             temperature=1,
-            top_p=0.7  
+            top_p=0.7
         )
 
         result = response.choices[0].message.content
