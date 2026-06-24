@@ -34,10 +34,6 @@ from app.common.services.download_ytsub import (
 from app.common.services.process_ytsub import process_ytsub
 
 
-# 全局存储任务状态 (临时存储，后续迁移到Firestore)
-tasks_store = {}
-
-
 async def process_translation_task(video_id, youtube_url, user_id, content_name, special_terms="", language="zh-CN", model=None):
     """
     处理翻译任务的主函数
@@ -274,37 +270,28 @@ async def create_translation_task(
 
 def get_task_status(task_id):
     """
-    获取任务状态，首先从内存获取，如内存中不存在则从Firestore获取
-    
+    获取任务状态，从Firestore获取
+
     参数:
         task_id (str): 任务ID
-        
+
     返回:
         dict: 任务状态信息
     """
-    # 先从内存中查找
-    if task_id in tasks_store:
-        return tasks_store[task_id]
-    
-    # 如果内存中不存在，从Firestore获取
     return get_task(task_id)
 
 
 def get_task_translation_strategies(task_id):
     """
     获取任务的翻译策略
-    
+
     参数:
         task_id (str): 任务ID
-        
+
     返回:
         dict: 任务的翻译策略，如果任务不存在或尚未生成策略则返回None
     """
-    # 先从内存中查找
-    if task_id in tasks_store and "trans_strategies" in tasks_store[task_id]:
-        return {"strategies": tasks_store[task_id]["trans_strategies"]}
-    
-    # 如果内存中不存在，从Firestore获取
+    # 从Firestore获取
     task_data = get_task(task_id)
     if task_data and "trans_strategies" in task_data:
         return {"strategies": task_data["trans_strategies"]}
