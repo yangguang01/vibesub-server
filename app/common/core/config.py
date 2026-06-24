@@ -23,7 +23,7 @@ DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1")
 # 第三方API配置
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_kEY","")
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 PROXY_URL = os.getenv("PROXY_URL", "")
 
 # API超时配置 - 优化后的超时设置
