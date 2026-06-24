@@ -216,7 +216,11 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
             # SubtitleFetchError 带用户可读文案，优先用它；其他异常回落原始信息
             user_error = getattr(e, "user_message", None) or str(e)
             await loop.run_in_executor(executor, update_video_task, video_id, "failed", 0, trans_strategies, user_error)
-        
+
+            # 重新抛出：否则上层 _safe_run_translation 会以为任务成功、误打 "✅ 翻译任务完成"。
+            # 抛出后 _safe_run_translation 进入 except，正确打 "❌" 并再写一次 failed（同态重复写，无害）。
+            raise
+
 
 async def create_translation_task(
     youtube_url, 
