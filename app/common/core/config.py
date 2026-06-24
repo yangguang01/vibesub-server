@@ -59,8 +59,7 @@ TRANSLATE_BATCH_SIZE = int(os.getenv("TRANSLATE_BATCH_SIZE", "10"))
 # 用量限制
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "5"))
 
-# pubsub配置
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+# Cloud Tasks 配置：trans-worker 的服务地址，cloud_tasks.py 用它拼回调 URL
 SERVICE_URL = os.getenv("SERVICE_URL")
 
 #Firebase
