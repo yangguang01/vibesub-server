@@ -454,35 +454,6 @@ def json_to_srt(data):
         srt_lines.append("")  # 添加空行分隔不同字幕段
     return "\n".join(srt_lines)
 
-# 250403更新：直接使用asr_result中的句子，不再合并短句子。因此删除此函数
-# def merge_incomplete_sentences(subtitles):
-#     """将英文字幕中的内容合并为完整句子"""
-#     # 按行分割字幕文本
-    lines = [line.strip() for line in subtitles.split('\n') if line.strip()]
-
-    # 存储合并后的句子
-    merged_sentences = []
-    current_sentence = ''
-
-    for line in lines:
-        if not line.isdigit() and '-->' not in line and line.strip() != '':
-            # 添加当前行到当前句子
-            current_sentence += ' ' + line if current_sentence else line
-
-            # 检查是否为完整句子
-            if any(current_sentence.endswith(symbol) for symbol in ['.', '?', '!']):
-                merged_sentences.append(current_sentence)
-                current_sentence = ''
-
-    # 确保最后一句也被添加（如果它是完整的）
-    if current_sentence:
-        merged_sentences.append(current_sentence)
-
-    # 将每个句子转换为字典，并添加序号
-    numbered_and_sentences = {i: sentence for i, sentence in enumerate(merged_sentences, start=1)}
-
-    return numbered_and_sentences
-
 # 250403更新：新增extract_asr_sentences函数
 def extract_asr_sentences(srt_content):
   """
@@ -1034,25 +1005,6 @@ def map_marged_sentence_to_timeranges(merged_content, subtitles):
     return merged_to_subtitles
 
 
-# 给中文翻译添加时间轴，生成未经句子长度优化的初始中文字幕
-def map_chinese_to_time_ranges(chinese_content, merged_engsentence_to_subtitles):
-    chinese_to_time = {}
-    chinese_subtitles = []
-
-    # 与句子合并后的英文字幕做匹配
-    for num, chinese_sentence in chinese_content.items():
-        if num in merged_engsentence_to_subtitles:
-            time_ranges, _ = merged_engsentence_to_subtitles[num]
-            chinese_to_time[num] = time_ranges, chinese_sentence
-
-            chinese_subtitles.append([
-                num,
-                time_ranges,
-                chinese_sentence
-            ])
-
-    return chinese_to_time
-
 def map_chinese_to_time_ranges_v2(chinese_content, merged_engsentence_to_subtitles):
     """
     给中文翻译添加时间轴，生成未经句子长度优化的初始中文字幕。
@@ -1089,64 +1041,12 @@ def map_chinese_to_time_ranges_v2(chinese_content, merged_engsentence_to_subtitl
     return chinese_to_time
 
 
-def parse_time(time_str):
-    """解析时间字符串为datetime对象"""
-    return datetime.strptime(time_str, '%H:%M:%S,%f')
-
-
 def time_to_str(dt):
     """
     将 datetime 对象格式化为 SRT 字幕时间格式：HH:MM:SS,mmm
     """
     return dt.strftime("%H:%M:%S,%f")[:-3]
 
-
-async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt, special_terms="", content_name="", model='deepseek-chat', video_id="unknown"):
-    """
-    使用DeepSeek异步并行翻译英文字幕到中文
-    """
-    items = list(numbered_sentences_chunks.items())
-    total_translated_dict = {}
-
-    # 处理特殊术语
-    if special_terms:
-        special_terms = special_terms.rstrip(".")
-        special_terms_list = special_terms.split(", ")
-
-    # 创建信号量
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
-    
-    # 创建异步OpenAI客户端，使用API_TIMEOUT配置超时
-    client = AsyncOpenAI(
-        api_key=DEEPSEEK_API_KEY, 
-        base_url="https://api.deepseek.com",  # 保持原始URL
-        timeout=API_TIMEOUT  # 直接使用API_TIMEOUT配置超时
-    )
-
-    # 创建批次处理任务
-    tasks = []
-    for i in range(0, len(items), BATCH_SIZE):
-        chunk = items[i:i + BATCH_SIZE]
-        tasks.append(
-            process_chunk(chunk, custom_prompt, model, client, semaphore, "system_prompt_placeholder", video_id)
-        )
-    
-    # 并行执行所有任务
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # 处理结果
-    for result in results:
-        if isinstance(result, Exception):
-            logger.error(f"批次处理失败: {str(result)}")
-            continue
-        
-        # 更新翻译结果
-        translations = result.get('translations', {})
-        total_translated_dict.update(translations)
-
-    logger.info(f'使用的模型：{model}')
-
-    return total_translated_dict
 
 # 050403更新
 # 使用分割后输入的字典内容
@@ -1237,147 +1137,6 @@ def format_subtitles_v2(subtitles_dict):
 #         logger.error(f"处理音频失败: {str(e)}", exc_info=True)
 #         raise 
 
-
-#async def split_long_chinese_sentence_v3(chinese_timeranges_dict, model='deepseek-chat'):
-#     '''
-#     v3版本，先把中文句子按照空格进行分割，然后再对超过40个字的长句子进行分割
-#     '''
-#     # 先按照空格分割
-#     space_split_subtitles = {}
-#     space_split_index = 1
-
-#     for index, (time_range, text) in chinese_timeranges_dict.items():
-#         start_time, end_time = time_range.split(' --> ')
-#         # 使用正则表达式分割中文句子之间的空格
-#         parts = re.split(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', text)
-#         num_parts = len(parts)
-#         total_length = sum(len(part) for part in parts)
-
-#         if num_parts > 1:
-#             start_time = parse_time(start_time)
-#             end_time = parse_time(end_time)
-#             word_per_duration = (end_time - start_time)/total_length
-#             current_start_time = start_time
-
-#             for i, part in enumerate(parts):
-#                 current_end_time = current_start_time + word_per_duration * len(part)
-#                 space_split_subtitles[space_split_index] = (f"{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}", part)
-#                 current_start_time = current_end_time
-#                 space_split_index += 1
-#         else:
-#             space_split_subtitles[space_split_index] = (time_range, text)
-#             space_split_index += 1
-
-#     # 复制字典
-#     split_subtitles_dict = space_split_subtitles.copy()
-
-#     # 找出中文字幕中的长字幕
-#     threshold = 40
-#     long_subtitles = []
-#     for key, (timeranges, subtitles) in space_split_subtitles.items():
-#         if len(subtitles) > threshold:
-#             long_subtitles.append((key, timeranges, subtitles))
-
-#     # 对长字幕开始进行优化
-#     # 循环控制
-#     for key, timeranges, subtitles in long_subtitles:
-#         # 在循环中提取时间范围
-#         start_str, end_str = timeranges.split(' --> ')
-#         start_time = parse_time(start_str)
-#         end_time = parse_time(end_str)
-
-#         # 在循环中调用api分割句子
-#         # api调用，返回api_return_content
-#         split_prompt_v2 = f'''
-#         Split the long Chinese sentences below, delimited by triple backtick
-#         - Only split long sentences, do not alter the content of the sentences
-#         - According to your understanding of the sentence, divide the long sentence into several short sentences that are easiest to understand.
-#         - When splitting, please keep the "linguistic integrity" together.
-#         - Each short sentence should not exceed 20 Chinese characters as much as possible.
-
-#         Provide your translation in json structure like this:{{
-#               '1':'<Segmented short sentences 1>',
-#               '2':'<Segmented short sentences 2>',
-#               }}
-#         long Chinese sentences below: ```{subtitles}```
-#         '''
-        
-#         logger.info(f"对长句子进行分割: {subtitles}")
-        
-#         client = AsyncOpenAI(
-#             api_key=DEEPSEEK_API_KEY, 
-#             base_url="https://api.deepseek.com",
-#             timeout=float(API_TIMEOUT)
-#         )
-        
-#         messages = [
-#             {"role": "user", "content": split_prompt_v2},
-#         ]
-        
-#         # 调用API分割长句子
-#         try:
-#             response = await client.chat.completions.create(
-#                 model=model,
-#                 response_format={'type': "json_object"},
-#                 messages=messages,
-#                 temperature=0,
-#                 top_p=1,
-#                 frequency_penalty=0,
-#                 presence_penalty=0,
-#             )
-#             api_return_content = response.choices[0].message.content
-            
-#             # 处理api返回的json结果，转为字典
-#             api_return_content_todict = json.loads(api_return_content)
-#             all_text = ''.join(api_return_content_todict.values())
-            
-#             # 在循环中完成短句的时间轴计算和匹配
-#             # 新建一个列表用来存储分割后的字幕信息
-#             split_subtitles = []
-#             # 计算总时长
-#             duration = (end_time - start_time).total_seconds()
-#             # 用返回的句子来计算每个字符的持续时间
-#             word_duration = duration / len(all_text)
-#             # 起始时间
-#             current_start_time = start_time
-#             # 为分割后的每个字幕生成时间轴
-#             short_subtitle_list = list(api_return_content_todict.values())
-#             for short_subtitle in short_subtitle_list:
-#                 # 计算时间轴信息
-#                 short_subtitle_duration = len(short_subtitle) * word_duration
-#                 current_end_time = current_start_time + timedelta(seconds=short_subtitle_duration)
-#                 # 存储分割后字幕的时间轴
-#                 short_subtitle_time_range = f'{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}'
-#                 split_subtitles.append((short_subtitle_time_range, short_subtitle))
-#                 # 更新初始时间
-#                 current_start_time = current_end_time
-            
-#             # 在循环中更新split_subtitles_dict字典
-#             split_subtitles_dict[key] = split_subtitles
-            
-#         except Exception as e:
-#             logger.error(f"长句分割失败: {str(e)}", exc_info=True)
-#             # 如果分割失败，保留原始句子
-#             split_subtitles_dict[key] = [(timeranges, subtitles)]
-
-#     logger.info(f'使用的模型：{model}')
-    
-#     # 处理最终的字典结构，使其符合预期的格式
-#     final_dict = {}
-#     current_index = 1
-    
-#     for key, value in split_subtitles_dict.items():
-#         if isinstance(value, list):  # 处理被分割的字幕
-#             for time_range, text in value:
-#                 final_dict[current_index] = (time_range, text)
-#                 current_index += 1
-#         else:  # 处理未被分割的字幕
-#             time_range, text = value
-#             final_dict[current_index] = (time_range, text)
-#             current_index += 1
-    
-#     logger.info(f"长句子拆分完成：原始{len(chinese_timeranges_dict)}个条目，拆分后{len(final_dict)}个条目")
-#     return final_dict 
 
 # 250403更新
 # 全新的长句分割方法。对于无法按照规则分割的句子，调用异步LLM分割
