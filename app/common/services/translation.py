@@ -1785,37 +1785,24 @@ async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_ch
     Args:
         numbered_sentences_chunks: 编号的句子块
         custom_prompt: 自定义提示词
-        model_choice: 模型选择，可选值为 "deepseek" 或 "gpt"
+        model_choice: 已废弃/被忽略——模型对用户透明，全程固定 DeepSeek（保留形参仅为兼容旧签名）
         special_terms: 特殊术语列表
         content_name: 内容名称
     
     Returns:
         翻译后的字典
     """
-    choice = (model_choice or "deepseek").lower()
-    if choice == "gpt":
-        model = 'gpt-4.1-mini'
-        return await translate_with_model(
-            numbered_sentences_chunks,
-            custom_prompt,
-            model=model,
-            api_key=OPENAI_API_KEY,
-            special_terms=special_terms,
-            content_name=content_name,
-            video_id=video_id
-        )
-    else:
-        # 默认走 DeepSeek（含空值/未知值兜底）——全程不依赖 OpenAI
-        model = 'deepseek-chat'
-        return await translate_with_model(
-            numbered_sentences_chunks,
-            custom_prompt,
-            model=model,
-            api_key=DEEPSEEK_API_KEY,
-            special_terms=special_terms,
-            content_name=content_name,
-            video_id=video_id
-        )
+    # 模型对用户透明：全程固定走 DeepSeek，不再按 model_choice 路由。
+    # 保留 model_choice 形参仅为兼容旧调用签名，其值被忽略（OpenAI 路径已废弃，留 T7 清理）。
+    return await translate_with_model(
+        numbered_sentences_chunks,
+        custom_prompt,
+        model='deepseek-chat',
+        api_key=DEEPSEEK_API_KEY,
+        special_terms=special_terms,
+        content_name=content_name,
+        video_id=video_id
+    )
 
 async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, api_key, special_terms="", content_name="", video_id="unknown"):
     """
@@ -1996,14 +1983,14 @@ async def get_video_context_from_llm(title, channel_name):
 
         messages=[
                     {"role": "system", "content": "步骤1：判断该channel是否是在你的知识库中。如果你了解该channel的相关信息，输出它的相关信息\n例如：channel name ： 3Blue1Brown\n这个频道以动画可视化数学原理闻名\n要求：仔细检查你的知识库，如果你不知道这个channel则诚实的说不知道，不要编造信息。\n\n步骤2：结合video title和步骤1的信息，输出你对视频内容的推断。然后简要描述针对这个视频，该采取什么样的翻译策略。\n要求：如果无法从title和channel name中推断视频内容，请诚实的说不知道，不要编造信息。\n\n步骤3：综合步骤1、2，以第一人称的口吻给出简要的3个翻译策略或注意事项。\n\t1.\t明确本次翻译应采用的话语风格（如：正式、学术、轻松、幽默等），风格应贴合视频内容和目标观众；\n\t2.\t识别该视频中可能包含的专业领域术语，简要列举 2-3 个代表性术语，并指出它们在翻译中应保持准确性或采用贴近母语习惯的表达；\n\t3.\t可补充其他翻译技巧，但不得包含模板化建议，如“术语首次出现时进行注释或举例说明”这类通用表述应避免使用。\n要求：如果无法从步骤1、2推断视频内容，请诚实的说不知道，不要编造信息。\n\n使用中文输出所有内容\n使用如下json格式进行输出\n{\n\"step1\": {\n\"channel_name\": \"string\",\n\"channel_info\": \"string or null\",\n\"can_judge\": true\n},\n\"step2\": {\n\"video_title\": \"string\",\n\"content_inference\": \"string or null\",\n\"can_judge\": true\n},\n\"step3\": {\n\"translation_strategies\": [\n\"string or null\",\n\"string or null\",\n\"special_terms_strategies\"\n],\n\"can_judge\": true\n}"},
-                    {"role": "user", "content": f"channel name: {channel_name}\nvideo title: {title}"}
+                    {"role": "user", "content": f"channel name: {channel_name}\nvideo title: {title}\n\n重要：无论频道名和视频标题是什么语言，step1、step2、step3 的所有输出文本（含 channel_info、content_inference、translation_strategies）都必须用简体中文。"}
                 ]
 
         response = await client.chat.completions.create(
             model="deepseek-chat",
             response_format={'type': "json_object"},
             messages=messages,
-            temperature=1,
+            temperature=0.3,
             top_p=0.7
         )
 

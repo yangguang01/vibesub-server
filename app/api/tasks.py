@@ -104,7 +104,8 @@ async def translate_video(request: TranslationRequest, user_id: str = Depends(ge
         "video_id": video_id,
         "content_name": request.content_name,
         "special_terms": request.special_terms or "",
-        "model": request.model or ""
+        # 模型对用户透明：无论插件传什么，一律走 DeepSeek（OpenAI 已无额度、也不再提供选择）
+        "model": "deepseek"
     }
     
     # 后台异步创建 Cloud Task，不等待结果（保持原有响应速度）

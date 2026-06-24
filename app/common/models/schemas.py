@@ -11,7 +11,7 @@ class TranslationRequest(BaseModel):
     special_terms: Optional[str] = ""
     content_name: Optional[str] = ""
     language: str = "zh-CN"
-    model: Optional[str] = "gpt"  # 新增
+    model: Optional[str] = "deepseek"  # 模型对用户透明，固定 DeepSeek；保留字段仅为兼容旧插件
     channel_name: Optional[str] = ""
 
 
