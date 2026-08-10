@@ -23,6 +23,7 @@ from app.common.services.translation import (
     json_to_srt,
     convert_AssemblyAI_to_srt,
 )
+from app.common.services.transcription import sentences_to_plain_text
 
 
 # ---------- 时间格式化 ----------
@@ -76,6 +77,20 @@ def test_subtitles_to_dict():
 def test_extract_asr_sentences():
     sentences = extract_asr_sentences(SAMPLE_SRT)
     assert sentences == {1: "Hello world", 2: "Second line"}
+
+
+def test_sentences_to_plain_text_orders_trims_and_skips_empty_sentences():
+    sentences = {
+        3: "  Third line  ",
+        1: " First line\n",
+        4: "   ",
+        2: "Second line",
+    }
+
+    text = sentences_to_plain_text(sentences)
+
+    assert text == "First line\n\nSecond line\n\nThird line"
+    assert not text.endswith("\n")
 
 
 def test_json_to_srt():

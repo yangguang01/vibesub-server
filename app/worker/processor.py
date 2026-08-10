@@ -32,6 +32,7 @@ from app.common.services.download_ytsub import (
     SubtitleFetchError,
 )
 from app.common.services.process_ytsub import process_ytsub
+from app.common.services.transcription import sentences_to_plain_text
 
 
 async def process_translation_task(video_id, youtube_url, user_id, content_name, special_terms="", language="zh-CN", model=None):
@@ -121,16 +122,6 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
                 try:
                     asr_result = await loop.run_in_executor(executor, transcribe_audio_with_assemblyai, filename)
                     srt_text = convert_AssemblyAI_to_srt(asr_result)
-                    # 异步上传英文字幕到Firebase Storage
-                    def upload_srt_to_storage():
-                        english_srt_blob = bucket.blob(f"asr_srt/{video_id}.srt")
-                        english_srt_blob.upload_from_string(
-                            srt_text,
-                            content_type="text/plain"
-                        )
-                        return english_srt_blob.public_url  # 返回上传后的URL
-                    # 放入线程池执行
-                    upload_url = await loop.run_in_executor(executor, upload_srt_to_storage)
                     await loop.run_in_executor(executor, update_video_task, video_id, "strategies_ready", 0.5)
                 except Exception as e:
                     logger.error(f"ASR处理失败: {e}")
@@ -148,6 +139,26 @@ async def process_translation_task(video_id, youtube_url, user_id, content_name,
         try:
             #将短句子合并为长句子
             numbered_sentences_chunks = extract_asr_sentences(srt_text)
+
+            # 英文原文是翻译流程的副产品：两条字幕来源统一上传纯文本，
+            # 不保留 SRT 序号和时间轴。上传失败不应阻断原有中文翻译。
+            english_text = sentences_to_plain_text(numbered_sentences_chunks)
+            if english_text:
+                try:
+                    def upload_english_text_to_storage():
+                        english_text_blob = bucket.blob(f"english_text/{video_id}.txt")
+                        english_text_blob.upload_from_string(
+                            english_text,
+                            content_type="text/plain; charset=utf-8"
+                        )
+
+                    await loop.run_in_executor(executor, upload_english_text_to_storage)
+                    logger.info(f"英文原文已保存: english_text/{video_id}.txt")
+                except Exception as e:
+                    logger.error(f"保存英文原文失败，继续中文翻译: {e}", exc_info=True)
+            else:
+                logger.warning(f"任务 {video_id} 未提取到可保存的英文原文")
+
             logger.info("开始翻译字幕...")
             #翻译字幕
             llm_trans_result = await translate_subtitles(

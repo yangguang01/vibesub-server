@@ -126,3 +126,15 @@ def extract_asr_sentences(srt_content):
   for match in matches:
       sentences[int(match[0])] = match[1].strip()
   return sentences
+
+
+def sentences_to_plain_text(sentences):
+    """将按编号存储的英文字幕转为供 LLM 使用的纯文本。
+
+    句子按编号排序，去掉首尾空白并跳过空句，相邻句子之间保留一个空行。
+    """
+    return "\n\n".join(
+        text.strip()
+        for _, text in sorted(sentences.items())
+        if text and text.strip()
+    )
